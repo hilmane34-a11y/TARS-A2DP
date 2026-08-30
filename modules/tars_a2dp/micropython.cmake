@@ -8,6 +8,11 @@ target_include_directories(usermod_tars_a2dp INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}
 )
 
+# Hubungkan modul A2DP dengan komponen Bluetooth ESP-IDF
+target_link_libraries(usermod_tars_a2dp INTERFACE
+    __idf_bt
+)
+
 target_link_libraries(usermod INTERFACE
     usermod_tars_a2dp
 )
