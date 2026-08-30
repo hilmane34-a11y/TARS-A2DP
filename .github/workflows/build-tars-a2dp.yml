@@ -116,8 +116,12 @@ jobs:
           cat "$BOARD_DIR/sdkconfig.bluetooth"
 
       - name: Build TARS MicroPython A2DP
+        id: build_tars
         shell: bash
+        continue-on-error: true
         run: |
+          set +e
+
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
@@ -128,7 +132,164 @@ jobs:
             BOARD=TARS_ESP32_A2DP \
             USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
 
+          BUILD_RESULT=$?
+
+          echo "BUILD_EXIT_CODE=$BUILD_RESULT" >> "$GITHUB_ENV"
+
+          echo "=================================================="
+          echo "BUILD EXIT CODE: $BUILD_RESULT"
+          echo "=================================================="
+
+          exit 0
+
+      - name: Diagnose Bluetooth configuration
+        if: always()
+        shell: bash
+        run: |
+          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
+
+          echo "=================================================="
+          echo "BUILD RESULT"
+          echo "=================================================="
+
+          echo "BUILD_EXIT_CODE=${BUILD_EXIT_CODE:-unknown}"
+
+          echo ""
+          echo "=================================================="
+          echo "CUSTOM BOARD CONFIG"
+          echo "=================================================="
+
+          cat \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "GENERATED SDKCONFIG BLUETOOTH"
+          echo "=================================================="
+
+          if [ -f "$BUILD/sdkconfig" ]; then
+            grep -n \
+              -E "^CONFIG_(BT|NIMBLE|BLE)" \
+              "$BUILD/sdkconfig" \
+              || true
+          else
+            echo "sdkconfig belum ditemukan"
+          fi
+
+          echo ""
+          echo "=================================================="
+          echo "CHECK NIMBLE DIRECTORIES"
+          echo "=================================================="
+
+          find \
+            "$GITHUB_WORKSPACE/esp-idf/components" \
+            -maxdepth 5 \
+            -type d \
+            \( -name "nimble" -o -name "nimble_port" \) \
+            -print \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "CHECK NIMBLE HEADERS"
+          echo "=================================================="
+
+          find \
+            "$GITHUB_WORKSPACE/esp-idf/components" \
+            -type f \
+            \( -name "ble_hs.h" -o -name "nimble_port.h" \) \
+            -print \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "CHECK BLUEDROID HEADERS"
+          echo "=================================================="
+
+          find \
+            "$GITHUB_WORKSPACE/esp-idf/components" \
+            -type f \
+            \( -name "esp_bt_main.h" -o -name "esp_a2dp_api.h" \) \
+            -print \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "BUILD LOG FILES"
+          echo "=================================================="
+
+          find \
+            "$BUILD/log" \
+            -maxdepth 1 \
+            -type f \
+            -print \
+            2>/dev/null \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "LAST 100 LINES OF IDF STDERR"
+          echo "=================================================="
+
+          STDERR_FILE=$(find \
+            "$BUILD/log" \
+            -name "idf_py_stderr_output_*" \
+            -type f \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -n "$STDERR_FILE" ]; then
+            tail -n 100 "$STDERR_FILE"
+          else
+            echo "Tidak ada idf stderr log"
+          fi
+
+          echo ""
+          echo "=================================================="
+          echo "MODULEDEFS TARS CHECK"
+          echo "=================================================="
+
+          if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
+            grep -n \
+              -E "tars_a2dp|tars_bluetooth" \
+              "$BUILD/genhdr/moduledefs.collected" \
+              || true
+          else
+            echo "moduledefs.collected belum dibuat"
+          fi
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TARS-Build-Diagnostic
+          path: |
+            micropython/ports/esp32/build-TARS_ESP32_A2DP/log/
+            micropython/ports/esp32/build-TARS_ESP32_A2DP/sdkconfig
+          if-no-files-found: warn
+
+      - name: Fail workflow if build failed
+        if: always()
+        shell: bash
+        run: |
+          echo "=================================================="
+          echo "FINAL BUILD STATUS"
+          echo "=================================================="
+
+          echo "BUILD_EXIT_CODE=${BUILD_EXIT_CODE:-unknown}"
+
+          if [ "${BUILD_EXIT_CODE:-1}" != "0" ]; then
+            echo ""
+            echo "TARS BUILD FAILED"
+            exit 1
+          fi
+
+          echo ""
+          echo "TARS BUILD SUCCESS"
+
       - name: Verify TARS modules
+        if: success()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
@@ -144,37 +305,23 @@ jobs:
           echo "MODULEDEFS.COLLECTED TARS"
           echo "=================================================="
 
-          if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
-            grep -n \
-              -E "tars_a2dp|tars_bluetooth" \
-              "$BUILD/genhdr/moduledefs.collected" \
-              || true
-          fi
+          grep -n \
+            -E "tars_a2dp|tars_bluetooth" \
+            "$BUILD/genhdr/moduledefs.collected" \
+            || true
 
           echo ""
           echo "=================================================="
           echo "MODULEDEFS.H TARS"
           echo "=================================================="
 
-          if [ -f "$BUILD/genhdr/moduledefs.h" ]; then
-            grep -n \
-              -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
-              "$BUILD/genhdr/moduledefs.h" \
-              || true
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "SOURCE REGISTRATION"
-          echo "=================================================="
-
           grep -n \
-            -E "MP_REGISTER_MODULE.*tars_a2dp|MP_REGISTER_MODULE.*tars_bluetooth" \
-            "$GITHUB_WORKSPACE/modules/tars_a2dp/tars_a2dp.c" \
-            "$GITHUB_WORKSPACE/modules/tars_bluetooth/tars_bluetooth.c" \
+            -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
+            "$BUILD/genhdr/moduledefs.h" \
             || true
 
       - name: Prepare firmware
+        if: success()
         shell: bash
         run: |
           mkdir -p output
@@ -190,6 +337,7 @@ jobs:
           ls -lh "$GITHUB_WORKSPACE/output"
 
       - name: Upload firmware
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TARS-MicroPython-ESP32-A2DP
