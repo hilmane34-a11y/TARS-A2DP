@@ -10,71 +10,12 @@ jobs:
 
     steps:
 
-      # =====================================================
-      # 1. CHECKOUT REPOSITORY
-      # =====================================================
-
       - name: Checkout TARS repository
         uses: actions/checkout@v4
-
-
-      # =====================================================
-      # 2. CHECK TARS MODULE STRUCTURE
-      # =====================================================
-
-      - name: Check TARS module structure
-        run: |
-          echo "=================================================="
-          echo "TARS MODULE STRUCTURE"
-          echo "=================================================="
-
-          find modules -type f | sort
-
-          echo ""
-          echo "=================================================="
-          echo "modules/micropython.cmake"
-          echo "=================================================="
-
-          cat modules/micropython.cmake
-
-          echo ""
-          echo "=================================================="
-          echo "modules/tars_a2dp/tars_a2dp.c"
-          echo "=================================================="
-
-          cat modules/tars_a2dp/tars_a2dp.c
-
-          echo ""
-          echo "=================================================="
-          echo "modules/tars_bluetooth/tars_bluetooth.c"
-          echo "=================================================="
-
-          cat modules/tars_bluetooth/tars_bluetooth.c
-
-
-      # =====================================================
-      # 3. VERIFY REQUIRED TARS FILES
-      # =====================================================
-
-      - name: Verify TARS files
-        run: |
-          set -e
-
-          test -f modules/micropython.cmake
-          test -f modules/tars_a2dp/tars_a2dp.c
-          test -f modules/tars_bluetooth/tars_bluetooth.c
-
-          echo "ALL REQUIRED TARS MODULE FILES FOUND"
-
-
-      # =====================================================
-      # 4. INSTALL SYSTEM PACKAGES
-      # =====================================================
 
       - name: Install system packages
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
             git \
             make \
@@ -91,67 +32,21 @@ jobs:
             libffi-dev \
             libssl-dev \
             dfu-util \
-            libusb-1.0-0 \
-            binutils
-
-
-      # =====================================================
-      # 5. CLONE MICROPYTHON
-      # =====================================================
+            libusb-1.0-0
 
       - name: Clone MicroPython
         run: |
-          git clone \
-            --depth 1 \
+          git clone --depth 1 \
             https://github.com/micropython/micropython.git \
             micropython
-
-
-      # =====================================================
-      # 6. SETUP MICROPYTHON SUBMODULES
-      # =====================================================
 
       - name: Setup MicroPython submodules
         run: |
           cd micropython
-
           git submodule update \
             --init \
             --recursive \
             --depth 1
-
-
-      # =====================================================
-      # 7. CHECK MP_REGISTER_MODULE DEFINITION
-      # =====================================================
-
-      - name: Check MP_REGISTER_MODULE definition
-        run: |
-          echo "=================================================="
-          echo "SEARCH MP_REGISTER_MODULE DEFINITION"
-          echo "=================================================="
-
-          grep -R -n \
-            -A 12 \
-            -B 3 \
-            "define MP_REGISTER_MODULE" \
-            micropython/py \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "SEARCH MODULE REGISTRATION SUPPORT"
-          echo "=================================================="
-
-          grep -R -n \
-            -E "MP_REGISTER_MODULE|MP_REGISTER_EXTENSIBLE_MODULE" \
-            micropython/py \
-            || true
-
-
-      # =====================================================
-      # 8. CLONE ESP-IDF
-      # =====================================================
 
       - name: Clone ESP-IDF
         run: |
@@ -161,13 +56,6 @@ jobs:
             https://github.com/espressif/esp-idf.git \
             esp-idf
 
-
-      # =====================================================
-      # 9. SETUP ESP-IDF SUBMODULES
-      # =====================================================
-
-      - name: Setup ESP-IDF submodules
-        run: |
           cd esp-idf
 
           git submodule update \
@@ -175,32 +63,15 @@ jobs:
             --recursive \
             --filter=tree:0
 
-
-      # =====================================================
-      # 10. INSTALL ESP-IDF
-      # =====================================================
-
       - name: Install ESP-IDF
         run: |
           cd esp-idf
-
           ./install.sh esp32
-
-
-      # =====================================================
-      # 11. BUILD MPY-CROSS
-      # =====================================================
 
       - name: Build mpy-cross
         run: |
           cd micropython
-
           make -C mpy-cross
-
-
-      # =====================================================
-      # 12. SETUP ESP32 SUBMODULES
-      # =====================================================
 
       - name: Setup ESP32 submodules
         shell: bash
@@ -211,16 +82,9 @@ jobs:
 
           make -C ports/esp32 submodules
 
-
-      # =====================================================
-      # 13. BUILD TARS MICROPYTHON
-      # =====================================================
-
       - name: Build TARS MicroPython
         shell: bash
         run: |
-          set -o pipefail
-
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
@@ -229,270 +93,71 @@ jobs:
 
           make -C ports/esp32 \
             BOARD=ESP32_GENERIC \
-            USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake" \
-            V=1 \
-            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+            USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
 
-
-      # =====================================================
-      # 14. CHECK GENERATED BUILTIN MODULE DEFINITIONS
-      # =====================================================
-
-      - name: Check generated builtin module definitions
-        run: |
-          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC"
-
-          echo "=================================================="
-          echo "SEARCH MODULEDEFS FILES"
-          echo "=================================================="
-
-          find "$BUILD" \
-            -type f \
-            \( \
-              -iname "*moduledefs*" \
-              -o \
-              -iname "*moduledef*" \
-            \) \
-            -print \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "SEARCH TARS IN MODULEDEFS FILES"
-          echo "=================================================="
-
-          find "$BUILD" \
-            -type f \
-            \( \
-              -iname "*moduledefs*" \
-              -o \
-              -iname "*moduledef*" \
-            \) \
-            -exec grep -Hn \
-              -E \
-              "tars_a2dp|tars_bluetooth|tars_a2dp_user_cmodule|tars_bluetooth_user_cmodule" \
-              {} \; \
-            2>/dev/null \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "SEARCH ALL BUILD FILES FOR MODULE REGISTRATION"
-          echo "=================================================="
-
-          grep -R -n \
-            -E \
-            "MP_REGISTER_MODULE\(MP_QSTR_tars_a2dp|MP_REGISTER_MODULE\(MP_QSTR_tars_bluetooth|tars_a2dp_user_cmodule|tars_bluetooth_user_cmodule" \
-            "$BUILD" \
-            2>/dev/null \
-            || true
-
-
-      # =====================================================
-      # 15. VERIFY TARS SOURCE OBJECTS
-      # =====================================================
-
-      - name: Verify TARS source objects
-        run: |
-          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC"
-
-          echo "=================================================="
-          echo "A2DP OBJECT FILES"
-          echo "=================================================="
-
-          find "$BUILD" \
-            -type f \
-            \( \
-              -name "*tars_a2dp*.obj" \
-              -o \
-              -name "*tars_a2dp*.o" \
-            \) \
-            -print \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "BLUETOOTH OBJECT FILES"
-          echo "=================================================="
-
-          find "$BUILD" \
-            -type f \
-            \( \
-              -name "*tars_bluetooth*.obj" \
-              -o \
-              -name "*tars_bluetooth*.o" \
-            \) \
-            -print \
-            || true
-
-
-      # =====================================================
-      # 16. VERIFY QSTR REGISTRATION
-      # =====================================================
-
-      - name: Verify TARS QSTR registration
-        run: |
-          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC"
-
-          echo "=================================================="
-          echo "QSTR REFERENCES"
-          echo "=================================================="
-
-          grep -R \
-            -E "tars_a2dp|tars_bluetooth" \
-            "$BUILD/genhdr" \
-            2>/dev/null \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "GENERATED QSTR DEFINITIONS"
-          echo "=================================================="
-
-          grep -E \
-            "QDEF.*tars_a2dp|QDEF.*tars_bluetooth" \
-            "$BUILD/genhdr/qstrdefs.generated.h" \
-            2>/dev/null \
-            || true
-
-
-      # =====================================================
-      # 17. VERIFY ELF EXISTS
-      # =====================================================
-
-      - name: Verify ELF exists
-        run: |
-          ELF="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC/micropython.elf"
-
-          echo "=================================================="
-          echo "ELF FILE"
-          echo "=================================================="
-
-          test -f "$ELF"
-
-          ls -lh "$ELF"
-
-
-      # =====================================================
-      # 18. VERIFY TARS SYMBOLS IN ELF
-      # =====================================================
-
-      - name: Verify TARS symbols in ELF
+      - name: Deep check TARS moduledefs
         shell: bash
         run: |
-          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
-
-          ELF="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC/micropython.elf"
+          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC"
 
           echo "=================================================="
-          echo "ALL TARS SYMBOLS"
+          echo "MODULEDEFS.COLLECTED CONTENT"
           echo "=================================================="
 
-          xtensa-esp32-elf-nm -a "$ELF" \
-            | grep -i \
-              -E "tars_a2dp|tars_bluetooth" \
+          cat "$BUILD/genhdr/moduledefs.collected" || true
+
+          echo ""
+          echo "=================================================="
+          echo "MODULEDEFS.H TARS SEARCH"
+          echo "=================================================="
+
+          grep -n -E \
+            "tars|a2dp|bluetooth" \
+            "$BUILD/genhdr/moduledefs.h" \
             || true
 
           echo ""
           echo "=================================================="
-          echo "A2DP MODULE SYMBOL"
+          echo "SOURCE FILE EXACT REGISTRATION"
           echo "=================================================="
 
-          xtensa-esp32-elf-nm -a "$ELF" \
-            | grep \
-              "tars_a2dp_user_cmodule" \
-            || true
+          echo "--- A2DP ---"
 
-          echo ""
-          echo "=================================================="
-          echo "BLUETOOTH MODULE SYMBOL"
-          echo "=================================================="
-
-          xtensa-esp32-elf-nm -a "$ELF" \
-            | grep \
-              "tars_bluetooth_user_cmodule" \
-            || true
-
-
-      # =====================================================
-      # 19. VERIFY MODULE NAMES IN ELF
-      # =====================================================
-
-      - name: Verify TARS module names in ELF
-        run: |
-          ELF="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC/micropython.elf"
-
-          echo "=================================================="
-          echo "TARS MODULE NAMES IN ELF"
-          echo "=================================================="
-
-          strings "$ELF" \
-            | grep -E \
-              "^tars_a2dp$|^tars_bluetooth$" \
-            || true
-
-
-      # =====================================================
-      # 20. VERIFY MP_REGISTER_MODULE IN SOURCE
-      # =====================================================
-
-      - name: Verify MP_REGISTER_MODULE source
-        run: |
-          echo "=================================================="
-          echo "A2DP REGISTRATION"
-          echo "=================================================="
-
-          grep -A4 -B2 \
+          grep -n -A 5 -B 5 \
             "MP_REGISTER_MODULE" \
-            modules/tars_a2dp/tars_a2dp.c \
+            "$GITHUB_WORKSPACE/modules/tars_a2dp/tars_a2dp.c" \
+            || true
+
+          echo ""
+
+          echo "--- BLUETOOTH ---"
+
+          grep -n -A 5 -B 5 \
+            "MP_REGISTER_MODULE" \
+            "$GITHUB_WORKSPACE/modules/tars_bluetooth/tars_bluetooth.c" \
             || true
 
           echo ""
           echo "=================================================="
-          echo "BLUETOOTH REGISTRATION"
+          echo "MODULEDEFS FILE LIST"
           echo "=================================================="
 
-          grep -A4 -B2 \
-            "MP_REGISTER_MODULE" \
-            modules/tars_bluetooth/tars_bluetooth.c \
+          find "$BUILD/genhdr" \
+            -type f \
+            -name "*moduledefs*" \
+            -print \
             || true
-
-
-      # =====================================================
-      # 21. PREPARE FIRMWARE
-      # =====================================================
 
       - name: Prepare firmware
         run: |
-          set -e
-
           mkdir -p output
 
-          FIRMWARE="micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin"
-
-          test -f "$FIRMWARE"
-
           cp \
-            "$FIRMWARE" \
+            micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin \
             output/TARS-MicroPython-ESP32-UTAMA-V1.bin
-
-          echo ""
-          echo "=================================================="
-          echo "FIRMWARE"
-          echo "=================================================="
-
-          ls -lh \
-            output/TARS-MicroPython-ESP32-UTAMA-V1.bin
-
-
-      # =====================================================
-      # 22. UPLOAD FIRMWARE
-      # =====================================================
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
-
         with:
           name: TARS-MicroPython-ESP32-UTAMA-V1
           path: output/TARS-MicroPython-ESP32-UTAMA-V1.bin
-          if-no-files-found: error
