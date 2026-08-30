@@ -1,163 +1,129 @@
-name: Build Utama TARS V1
+name: Build TARS MicroPython ESP32
 
 on:
+  push:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
 
     steps:
 
       - name: Checkout TARS repository
         uses: actions/checkout@v4
 
-      - name: Install system packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            make \
-            gcc \
-            g++ \
-            cmake \
-            ninja-build \
-            python3 \
-            python3-pip \
-            flex \
-            bison \
-            gperf \
-            ccache \
-            libffi-dev \
-            libssl-dev \
-            dfu-util \
-            libusb-1.0-0
+      - name: Checkout MicroPython
+        uses: actions/checkout@v4
+        with:
+          repository: micropython/micropython
+          path: micropython
+          submodules: recursive
 
-      - name: Clone MicroPython
-        run: |
-          git clone --depth 1 \
-            https://github.com/micropython/micropython.git \
-            micropython
+      - name: Checkout ESP-IDF
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-idf
+          ref: v5.5
+          path: esp-idf
+          submodules: recursive
 
-      - name: Setup MicroPython submodules
-        run: |
-          cd micropython
-          git submodule update \
-            --init \
-            --recursive \
-            --depth 1
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Clone ESP-IDF
-        run: |
-          git clone \
-            --depth 1 \
-            --branch v5.5.2 \
-            https://github.com/espressif/esp-idf.git \
-            esp-idf
-
-          cd esp-idf
-
-          git submodule update \
-            --init \
-            --recursive \
-            --filter=tree:0
-
-      - name: Install ESP-IDF
+      - name: Install ESP-IDF dependencies
+        shell: bash
         run: |
           cd esp-idf
           ./install.sh esp32
 
-      - name: Build mpy-cross
+      - name: Show project structure
+        shell: bash
         run: |
-          cd micropython
-          make -C mpy-cross
+          echo "===== ROOT ====="
+          ls -la
 
-      - name: Setup ESP32 submodules
+          echo ""
+          echo "===== MODULES ====="
+          find modules -maxdepth 3 -type f | sort || true
+
+      - name: Build MicroPython ESP32
         shell: bash
         run: |
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
-          cd "$GITHUB_WORKSPACE/micropython"
+          cd "$GITHUB_WORKSPACE/micropython/ports/esp32"
 
-          make -C ports/esp32 submodules
+          rm -rf build-ESP32_GENERIC
 
-      - name: Build TARS MicroPython
-        shell: bash
-        run: |
-          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
-
-          cd "$GITHUB_WORKSPACE/micropython"
-
-          rm -rf ports/esp32/build-ESP32_GENERIC
-
-          make -C ports/esp32 \
+          make \
             BOARD=ESP32_GENERIC \
-            USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
+            USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake" \
+            ESPIDF="$GITHUB_WORKSPACE/esp-idf"
 
-      - name: Deep check TARS moduledefs
+      - name: Verify TARS modules
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC"
 
           echo "=================================================="
-          echo "MODULEDEFS.COLLECTED CONTENT"
+          echo "CHECK FIRMWARE"
           echo "=================================================="
 
-          cat "$BUILD/genhdr/moduledefs.collected" || true
+          ls -lh "$BUILD"/*.bin || true
 
           echo ""
           echo "=================================================="
-          echo "MODULEDEFS.H TARS SEARCH"
+          echo "MODULEDEFS.COLLECTED TARS"
           echo "=================================================="
 
-          grep -n -E \
-            "tars|a2dp|bluetooth" \
+          grep -n \
+            -E "tars_a2dp|tars_bluetooth" \
+            "$BUILD/genhdr/moduledefs.collected" \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "MODULEDEFS.H TARS"
+          echo "=================================================="
+
+          grep -n \
+            -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
             "$BUILD/genhdr/moduledefs.h" \
             || true
 
           echo ""
           echo "=================================================="
-          echo "SOURCE FILE EXACT REGISTRATION"
+          echo "SOURCE REGISTRATION"
           echo "=================================================="
 
-          echo "--- A2DP ---"
-
-          grep -n -A 5 -B 5 \
-            "MP_REGISTER_MODULE" \
+          grep -n \
+            -E "MP_REGISTER_MODULE.*tars_a2dp|MP_REGISTER_MODULE.*tars_bluetooth" \
             "$GITHUB_WORKSPACE/modules/tars_a2dp/tars_a2dp.c" \
-            || true
-
-          echo ""
-
-          echo "--- BLUETOOTH ---"
-
-          grep -n -A 5 -B 5 \
-            "MP_REGISTER_MODULE" \
             "$GITHUB_WORKSPACE/modules/tars_bluetooth/tars_bluetooth.c" \
             || true
 
-          echo ""
-          echo "=================================================="
-          echo "MODULEDEFS FILE LIST"
-          echo "=================================================="
-
-          find "$BUILD/genhdr" \
-            -type f \
-            -name "*moduledefs*" \
-            -print \
-            || true
-
-      - name: Prepare firmware
+      - name: Copy firmware files
+        shell: bash
         run: |
-          mkdir -p output
+          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC"
 
-          cp \
-            micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin \
-            output/TARS-MicroPython-ESP32-UTAMA-V1.bin
+          mkdir -p firmware
 
-      - name: Upload firmware
+          find "$BUILD" \
+            -maxdepth 2 \
+            -type f \
+            \( -name "*.bin" \) \
+            -exec cp {} firmware/ \;
+
+          echo "===== FIRMWARE FILES ====="
+          ls -lh firmware
+
+      - name: Upload TARS firmware
         uses: actions/upload-artifact@v4
         with:
           name: TARS-MicroPython-ESP32-UTAMA-V1
-          path: output/TARS-MicroPython-ESP32-UTAMA-V1.bin
+          path: firmware/
+          if-no-files-found: error
