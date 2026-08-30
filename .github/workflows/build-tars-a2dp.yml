@@ -13,9 +13,38 @@ jobs:
       - name: Checkout TARS repository
         uses: actions/checkout@v4
 
+
+      - name: Check module files
+        run: |
+          echo "===== MODULE STRUCTURE ====="
+          find modules -type f | sort
+
+          echo ""
+          echo "===== MAIN CMAKE ====="
+          cat modules/micropython.cmake
+
+          echo ""
+          echo "===== A2DP SOURCE ====="
+          cat modules/tars_a2dp/tars_a2dp.c
+
+          echo ""
+          echo "===== BLUETOOTH SOURCE ====="
+          cat modules/tars_bluetooth/tars_bluetooth.c
+
+
+      - name: Verify module files
+        run: |
+          test -f modules/micropython.cmake
+          test -f modules/tars_a2dp/tars_a2dp.c
+          test -f modules/tars_bluetooth/tars_bluetooth.c
+
+          echo "ALL TARS MODULE FILES FOUND"
+
+
       - name: Install system packages
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             git \
             make \
@@ -34,19 +63,24 @@ jobs:
             dfu-util \
             libusb-1.0-0
 
+
       - name: Clone MicroPython
         run: |
-          git clone --depth 1 \
+          git clone \
+            --depth 1 \
             https://github.com/micropython/micropython.git \
             micropython
+
 
       - name: Setup MicroPython submodules
         run: |
           cd micropython
+
           git submodule update \
             --init \
             --recursive \
             --depth 1
+
 
       - name: Clone ESP-IDF
         run: |
@@ -63,15 +97,20 @@ jobs:
             --recursive \
             --filter=tree:0
 
+
       - name: Install ESP-IDF
         run: |
           cd esp-idf
+
           ./install.sh esp32
+
 
       - name: Build mpy-cross
         run: |
           cd micropython
+
           make -C mpy-cross
+
 
       - name: Setup ESP32 submodules
         shell: bash
@@ -81,6 +120,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/micropython"
 
           make -C ports/esp32 submodules
+
 
       - name: Build TARS MicroPython
         shell: bash
@@ -93,7 +133,36 @@ jobs:
 
           make -C ports/esp32 \
             BOARD=ESP32_GENERIC \
-            USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
+            USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake" \
+            V=1
+
+
+      - name: Verify TARS modules compiled
+        run: |
+          BUILD="micropython/ports/esp32/build-ESP32_GENERIC"
+
+          echo "===== SEARCH A2DP OBJECT ====="
+
+          find "$BUILD" -type f \
+            | grep "tars_a2dp" \
+            || true
+
+          echo ""
+          echo "===== SEARCH BLUETOOTH OBJECT ====="
+
+          find "$BUILD" -type f \
+            | grep "tars_bluetooth" \
+            || true
+
+          echo ""
+          echo "===== SEARCH QSTR ====="
+
+          grep -R \
+            -E "tars_a2dp|tars_bluetooth" \
+            "$BUILD/genhdr" \
+            2>/dev/null \
+            || true
+
 
       - name: Prepare firmware
         run: |
@@ -103,8 +172,10 @@ jobs:
             micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin \
             output/TARS-MicroPython-ESP32-UTAMA-V1.bin
 
+
       - name: Upload firmware
         uses: actions/upload-artifact@v4
+
         with:
           name: TARS-MicroPython-ESP32-UTAMA-V1
           path: output/TARS-MicroPython-ESP32-UTAMA-V1.bin
