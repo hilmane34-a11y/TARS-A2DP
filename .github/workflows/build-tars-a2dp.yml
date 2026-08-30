@@ -1,34 +1,21 @@
-name: Build TARS Bluetooth A2DP
+name: Build Utama TARS V1
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
-    timeout-minutes: 90
-
+    timeout-minutes: 60
 
     steps:
 
-      # ==============================================
-      # CHECKOUT
-      # ==============================================
-
-      - name: Checkout repository
+      - name: Checkout TARS repository
         uses: actions/checkout@v4
-
-
-      # ==============================================
-      # SYSTEM PACKAGES
-      # ==============================================
 
       - name: Install system packages
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
             git \
             make \
@@ -47,100 +34,44 @@ jobs:
             dfu-util \
             libusb-1.0-0
 
-
-      # ==============================================
-      # CLONE MICROPYTHON
-      # ==============================================
-
       - name: Clone MicroPython
         run: |
-          git clone \
-            --depth 1 \
+          git clone --depth 1 \
             https://github.com/micropython/micropython.git \
             micropython
-
-
-      # ==============================================
-      # MICROPYTHON SUBMODULES
-      # ==============================================
 
       - name: Setup MicroPython submodules
         run: |
           cd micropython
-
           git submodule update \
             --init \
             --recursive \
             --depth 1
-
-
-      # ==============================================
-      # DETECT REQUIRED ESP-IDF VERSION
-      # ==============================================
-
-      - name: Detect MicroPython ESP-IDF version
-        run: |
-          grep -A5 \
-            "idf:" \
-            micropython/ports/esp32/lockfiles/dependencies.lock.esp32 \
-            || true
-
-
-      # ==============================================
-      # CLONE ESP-IDF
-      #
-      # MicroPython master saat build ini memakai
-      # ESP-IDF yang sesuai lockfile.
-      # ==============================================
 
       - name: Clone ESP-IDF
         run: |
           git clone \
             --depth 1 \
-            --branch v5.5.5 \
+            --branch v5.5.2 \
             https://github.com/espressif/esp-idf.git \
             esp-idf
 
-
-      # ==============================================
-      # ESP-IDF SUBMODULES
-      # ==============================================
-
-      - name: Setup ESP-IDF submodules
-        run: |
           cd esp-idf
 
           git submodule update \
             --init \
             --recursive \
-            --depth 1
-
-
-      # ==============================================
-      # INSTALL ESP32 TOOLCHAIN
-      # ==============================================
+            --filter=tree:0
 
       - name: Install ESP-IDF
         run: |
           cd esp-idf
-
           ./install.sh esp32
-
-
-      # ==============================================
-      # MPY CROSS
-      # ==============================================
 
       - name: Build mpy-cross
         run: |
           cd micropython
-
           make -C mpy-cross
-
-
-      # ==============================================
-      # ESP32 SUBMODULES
-      # ==============================================
 
       - name: Setup ESP32 submodules
         shell: bash
@@ -151,170 +82,29 @@ jobs:
 
           make -C ports/esp32 submodules
 
-
-      # ==============================================
-      # CREATE CUSTOM BOARD
-      # ==============================================
-
-      - name: Create TARS A2DP board
-        run: |
-
-          mkdir -p \
-            micropython/ports/esp32/boards/TARS_ESP32_A2DP
-
-
-          cp -a \
-            micropython/ports/esp32/boards/ESP32_GENERIC/. \
-            micropython/ports/esp32/boards/TARS_ESP32_A2DP/
-
-
-      # ==============================================
-      # SDKCONFIG
-      #
-      # Enable Bluetooth Classic + Bluedroid.
-      # Disable NimBLE because this firmware
-      # uses the custom Classic BT stack.
-      # ==============================================
-
-      - name: Configure Bluetooth Classic A2DP
-        run: |
-
-          cat > \
-            micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.a2dp \
-            <<'EOF'
-
-          CONFIG_BT_ENABLED=y
-          CONFIG_BT_BLUEDROID_ENABLED=y
-          CONFIG_BT_NIMBLE_ENABLED=n
-
-          CONFIG_BT_CLASSIC_ENABLED=y
-
-          CONFIG_BT_A2DP_ENABLE=y
-          CONFIG_BT_SPP_ENABLED=y
-
-          EOF
-
-
-      # ==============================================
-      # BOARD CMAKE
-      # ==============================================
-
-      - name: Configure board CMake
-        run: |
-
-          cat > \
-            micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.cmake \
-            <<'EOF'
-
-          set(SDKCONFIG_DEFAULTS
-              boards/sdkconfig.base
-              ${MICROPY_BOARD_DIR}/sdkconfig.a2dp
-          )
-
-          EOF
-
-
-      # ==============================================
-      # DISABLE MICROPYTHON NIMBLE MODULE
-      #
-      # Ini mencegah MicroPython mencoba compile
-      # header NimBLE ketika NimBLE ESP-IDF dimatikan.
-      # ==============================================
-
-      - name: Disable MicroPython NimBLE
-        run: |
-
-          cat >> \
-            micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.h \
-            <<'EOF'
-
-
-          #undef MICROPY_PY_BLUETOOTH
-          #define MICROPY_PY_BLUETOOTH (0)
-
-          #undef MICROPY_PY_BLUETOOTH_LE
-          #define MICROPY_PY_BLUETOOTH_LE (0)
-
-          EOF
-
-
-      # ==============================================
-      # BUILD FIRMWARE
-      # ==============================================
-
-      - name: Build TARS firmware
+      - name: Build TARS MicroPython
         shell: bash
         run: |
-
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
-
 
           cd "$GITHUB_WORKSPACE/micropython"
 
-
-          rm -rf \
-            ports/esp32/build-TARS_ESP32_A2DP
-
+          rm -rf ports/esp32/build-ESP32_GENERIC
 
           make -C ports/esp32 \
-            BOARD=TARS_ESP32_A2DP \
+            BOARD=ESP32_GENERIC \
             USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
-
-
-      # ==============================================
-      # VERIFY MODULE SOURCES
-      # ==============================================
-
-      - name: Verify TARS module sources
-        run: |
-
-          ELF="micropython/ports/esp32/build-TARS_ESP32_A2DP/micropython.elf"
-
-
-          echo "===== SEARCHING TARS SYMBOLS ====="
-
-
-          NM_TOOL=$(find \
-            "$HOME/.espressif/tools" \
-            -name xtensa-esp32-elf-nm \
-            -type f \
-            | head -n 1)
-
-
-          echo "Using: $NM_TOOL"
-
-
-          "$NM_TOOL" "$ELF" \
-            | grep -i \
-            "tars_.*cmodule\|tars_a2dp_test\|tars_bluetooth_test" \
-            || true
-
-
-      # ==============================================
-      # PREPARE OUTPUT
-      # ==============================================
 
       - name: Prepare firmware
         run: |
-
           mkdir -p output
 
-
           cp \
-            micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin \
-            output/TARS-Bluetooth-A2DP.bin
-
-
-      # ==============================================
-      # UPLOAD
-      # ==============================================
+            micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin \
+            output/TARS-MicroPython-ESP32-UTAMA-V1.bin
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
-
         with:
-
-          name: TARS-Bluetooth-A2DP
-
-          path: |
-            output/TARS-Bluetooth-A2DP.bin
+          name: TARS-MicroPython-ESP32-UTAMA-V1
+          path: output/TARS-MicroPython-ESP32-UTAMA-V1.bin
