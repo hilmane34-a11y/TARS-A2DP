@@ -1,4 +1,4 @@
-name: Build Utama TARS V1
+name: Build TARS MicroPython ESP32 A2DP
 
 on:
   workflow_dispatch:
@@ -43,6 +43,7 @@ jobs:
       - name: Setup MicroPython submodules
         run: |
           cd micropython
+
           git submodule update \
             --init \
             --recursive \
@@ -82,82 +83,115 @@ jobs:
 
           make -C ports/esp32 submodules
 
-      - name: Build TARS MicroPython
+      - name: Install TARS custom board
+        shell: bash
+        run: |
+          BOARD_DIR="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP"
+
+          mkdir -p "$BOARD_DIR"
+
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.h" \
+            "$BOARD_DIR/"
+
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.cmake" \
+            "$BOARD_DIR/"
+
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" \
+            "$BOARD_DIR/"
+
+          echo "=================================================="
+          echo "TARS CUSTOM BOARD FILES"
+          echo "=================================================="
+
+          ls -la "$BOARD_DIR"
+
+          echo ""
+          echo "=================================================="
+          echo "SDKCONFIG BLUETOOTH"
+          echo "=================================================="
+
+          cat "$BOARD_DIR/sdkconfig.bluetooth"
+
+      - name: Build TARS MicroPython A2DP
         shell: bash
         run: |
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
 
-          rm -rf ports/esp32/build-ESP32_GENERIC
+          rm -rf ports/esp32/build-TARS_ESP32_A2DP
 
           make -C ports/esp32 \
-            BOARD=ESP32_GENERIC \
+            BOARD=TARS_ESP32_A2DP \
             USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
 
-      - name: Deep check TARS moduledefs
+      - name: Verify TARS modules
         shell: bash
         run: |
-          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC"
+          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
           echo "=================================================="
-          echo "MODULEDEFS.COLLECTED CONTENT"
+          echo "CHECK FIRMWARE"
           echo "=================================================="
 
-          cat "$BUILD/genhdr/moduledefs.collected" || true
+          ls -lh "$BUILD/firmware.bin"
 
           echo ""
           echo "=================================================="
-          echo "MODULEDEFS.H TARS SEARCH"
+          echo "MODULEDEFS.COLLECTED TARS"
           echo "=================================================="
 
-          grep -n -E \
-            "tars|a2dp|bluetooth" \
-            "$BUILD/genhdr/moduledefs.h" \
-            || true
+          if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
+            grep -n \
+              -E "tars_a2dp|tars_bluetooth" \
+              "$BUILD/genhdr/moduledefs.collected" \
+              || true
+          fi
 
           echo ""
           echo "=================================================="
-          echo "SOURCE FILE EXACT REGISTRATION"
+          echo "MODULEDEFS.H TARS"
           echo "=================================================="
 
-          echo "--- A2DP ---"
+          if [ -f "$BUILD/genhdr/moduledefs.h" ]; then
+            grep -n \
+              -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
+              "$BUILD/genhdr/moduledefs.h" \
+              || true
+          fi
 
-          grep -n -A 5 -B 5 \
-            "MP_REGISTER_MODULE" \
+          echo ""
+          echo "=================================================="
+          echo "SOURCE REGISTRATION"
+          echo "=================================================="
+
+          grep -n \
+            -E "MP_REGISTER_MODULE.*tars_a2dp|MP_REGISTER_MODULE.*tars_bluetooth" \
             "$GITHUB_WORKSPACE/modules/tars_a2dp/tars_a2dp.c" \
-            || true
-
-          echo ""
-
-          echo "--- BLUETOOTH ---"
-
-          grep -n -A 5 -B 5 \
-            "MP_REGISTER_MODULE" \
             "$GITHUB_WORKSPACE/modules/tars_bluetooth/tars_bluetooth.c" \
             || true
 
-          echo ""
-          echo "=================================================="
-          echo "MODULEDEFS FILE LIST"
-          echo "=================================================="
-
-          find "$BUILD/genhdr" \
-            -type f \
-            -name "*moduledefs*" \
-            -print \
-            || true
-
       - name: Prepare firmware
+        shell: bash
         run: |
           mkdir -p output
 
           cp \
-            micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin \
-            output/TARS-MicroPython-ESP32-UTAMA-V1.bin
+            "$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin" \
+            "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP.bin"
+
+          echo "=================================================="
+          echo "OUTPUT FIRMWARE"
+          echo "=================================================="
+
+          ls -lh "$GITHUB_WORKSPACE/output"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: TARS-MicroPython-ESP32-UTAMA-V1
-          path: output/TARS-MicroPython-ESP32-UTAMA-V1.bin
+          name: TARS-MicroPython-ESP32-A2DP
+          path: output/TARS-MicroPython-ESP32-A2DP.bin
+          if-no-files-found: error
