@@ -37,7 +37,6 @@ tars_a2dp_globals_table[] = {
 
 };
 
-
 static MP_DEFINE_CONST_DICT(
     tars_a2dp_globals,
     tars_a2dp_globals_table
@@ -56,8 +55,7 @@ tars_a2dp_user_cmodule = {
     },
 
     .globals =
-        (mp_obj_dict_t *)
-        &tars_a2dp_globals,
+        (mp_obj_dict_t *)&tars_a2dp_globals,
 
 };
 
@@ -68,6 +66,5 @@ tars_a2dp_user_cmodule = {
 
 MP_REGISTER_MODULE(
     MP_QSTR_tars_a2dp,
-    tars_a2dp_user_cmodule,
-    MODULE_TARS_A2DP_ENABLED
+    tars_a2dp_user_cmodule
 );
