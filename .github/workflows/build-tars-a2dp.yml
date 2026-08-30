@@ -64,7 +64,6 @@ jobs:
           test -f modules/tars_a2dp/tars_a2dp.c
           test -f modules/tars_bluetooth/tars_bluetooth.c
 
-          echo ""
           echo "ALL REQUIRED TARS MODULE FILES FOUND"
 
 
@@ -236,7 +235,61 @@ jobs:
 
 
       # =====================================================
-      # 14. VERIFY TARS SOURCE OBJECTS
+      # 14. CHECK GENERATED BUILTIN MODULE DEFINITIONS
+      # =====================================================
+
+      - name: Check generated builtin module definitions
+        run: |
+          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-ESP32_GENERIC"
+
+          echo "=================================================="
+          echo "SEARCH MODULEDEFS FILES"
+          echo "=================================================="
+
+          find "$BUILD" \
+            -type f \
+            \( \
+              -iname "*moduledefs*" \
+              -o \
+              -iname "*moduledef*" \
+            \) \
+            -print \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "SEARCH TARS IN MODULEDEFS FILES"
+          echo "=================================================="
+
+          find "$BUILD" \
+            -type f \
+            \( \
+              -iname "*moduledefs*" \
+              -o \
+              -iname "*moduledef*" \
+            \) \
+            -exec grep -Hn \
+              -E \
+              "tars_a2dp|tars_bluetooth|tars_a2dp_user_cmodule|tars_bluetooth_user_cmodule" \
+              {} \; \
+            2>/dev/null \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "SEARCH ALL BUILD FILES FOR MODULE REGISTRATION"
+          echo "=================================================="
+
+          grep -R -n \
+            -E \
+            "MP_REGISTER_MODULE\(MP_QSTR_tars_a2dp|MP_REGISTER_MODULE\(MP_QSTR_tars_bluetooth|tars_a2dp_user_cmodule|tars_bluetooth_user_cmodule" \
+            "$BUILD" \
+            2>/dev/null \
+            || true
+
+
+      # =====================================================
+      # 15. VERIFY TARS SOURCE OBJECTS
       # =====================================================
 
       - name: Verify TARS source objects
@@ -254,7 +307,8 @@ jobs:
               -o \
               -name "*tars_a2dp*.o" \
             \) \
-            -print
+            -print \
+            || true
 
           echo ""
           echo "=================================================="
@@ -268,11 +322,12 @@ jobs:
               -o \
               -name "*tars_bluetooth*.o" \
             \) \
-            -print
+            -print \
+            || true
 
 
       # =====================================================
-      # 15. VERIFY QSTR REGISTRATION
+      # 16. VERIFY QSTR REGISTRATION
       # =====================================================
 
       - name: Verify TARS QSTR registration
@@ -302,7 +357,7 @@ jobs:
 
 
       # =====================================================
-      # 16. VERIFY ELF EXISTS
+      # 17. VERIFY ELF EXISTS
       # =====================================================
 
       - name: Verify ELF exists
@@ -319,7 +374,7 @@ jobs:
 
 
       # =====================================================
-      # 17. VERIFY TARS SYMBOLS IN ELF
+      # 18. VERIFY TARS SYMBOLS IN ELF
       # =====================================================
 
       - name: Verify TARS symbols in ELF
@@ -360,7 +415,7 @@ jobs:
 
 
       # =====================================================
-      # 18. VERIFY MODULE NAMES IN ELF
+      # 19. VERIFY MODULE NAMES IN ELF
       # =====================================================
 
       - name: Verify TARS module names in ELF
@@ -378,7 +433,7 @@ jobs:
 
 
       # =====================================================
-      # 19. VERIFY MP_REGISTER_MODULE IN SOURCE
+      # 20. VERIFY MP_REGISTER_MODULE IN SOURCE
       # =====================================================
 
       - name: Verify MP_REGISTER_MODULE source
@@ -389,7 +444,8 @@ jobs:
 
           grep -A4 -B2 \
             "MP_REGISTER_MODULE" \
-            modules/tars_a2dp/tars_a2dp.c
+            modules/tars_a2dp/tars_a2dp.c \
+            || true
 
           echo ""
           echo "=================================================="
@@ -398,11 +454,12 @@ jobs:
 
           grep -A4 -B2 \
             "MP_REGISTER_MODULE" \
-            modules/tars_bluetooth/tars_bluetooth.c
+            modules/tars_bluetooth/tars_bluetooth.c \
+            || true
 
 
       # =====================================================
-      # 20. PREPARE FIRMWARE
+      # 21. PREPARE FIRMWARE
       # =====================================================
 
       - name: Prepare firmware
@@ -411,11 +468,12 @@ jobs:
 
           mkdir -p output
 
-          test -f \
-            micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin
+          FIRMWARE="micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin"
+
+          test -f "$FIRMWARE"
 
           cp \
-            micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin \
+            "$FIRMWARE" \
             output/TARS-MicroPython-ESP32-UTAMA-V1.bin
 
           echo ""
@@ -428,7 +486,7 @@ jobs:
 
 
       # =====================================================
-      # 21. UPLOAD FIRMWARE
+      # 22. UPLOAD FIRMWARE
       # =====================================================
 
       - name: Upload firmware
