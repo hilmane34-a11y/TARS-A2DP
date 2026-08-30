@@ -8,4 +8,6 @@ target_include_directories(usermod_tars_a2dp INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}
 )
 
-target_link_libraries(usermod INTERFACE usermod_tars_a2dp)
+target_link_libraries(usermod INTERFACE
+    usermod_tars_a2dp
+)
