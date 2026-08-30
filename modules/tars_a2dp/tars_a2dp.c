@@ -10,14 +10,8 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 );
 
 static const mp_rom_map_elem_t tars_a2dp_globals_table[] = {
-    {
-        MP_ROM_QSTR(MP_QSTR___name__),
-        MP_ROM_QSTR(MP_QSTR_tars_a2dp)
-    },
-    {
-        MP_ROM_QSTR(MP_QSTR_test),
-        MP_ROM_PTR(&tars_a2dp_test_obj)
-    },
+    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_tars_a2dp) },
+    { MP_ROM_QSTR(MP_QSTR_test), MP_ROM_PTR(&tars_a2dp_test_obj) },
 };
 
 static MP_DEFINE_CONST_DICT(
