@@ -1,0 +1,233 @@
+name: Build Utama TARS V1
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+
+      - name: Checkout TARS repository
+        uses: actions/checkout@v4
+
+
+      - name: Show repository structure
+        run: |
+          echo "===== REPOSITORY STRUCTURE ====="
+          find . -maxdepth 4 -type f | sort
+
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            git \
+            make \
+            gcc \
+            g++ \
+            cmake \
+            ninja-build \
+            python3 \
+            python3-pip \
+            flex \
+            bison \
+            gperf \
+            ccache \
+            libffi-dev \
+            libssl-dev \
+            dfu-util \
+            libusb-1.0-0
+
+
+      - name: Check TARS module files
+        run: |
+          echo "===== CHECK MODULE FILES ====="
+
+          test -f modules/micropython.cmake
+          test -f modules/tars_a2dp/micropython.cmake
+          test -f modules/tars_a2dp/tars_a2dp.c
+
+          echo ""
+          echo "===== modules/micropython.cmake ====="
+          cat modules/micropython.cmake
+
+          echo ""
+          echo "===== modules/tars_a2dp/micropython.cmake ====="
+          cat modules/tars_a2dp/micropython.cmake
+
+          echo ""
+          echo "===== modules/tars_a2dp/tars_a2dp.c ====="
+          cat modules/tars_a2dp/tars_a2dp.c
+
+
+      - name: Clone MicroPython
+        run: |
+          git clone \
+            --depth 1 \
+            https://github.com/micropython/micropython.git \
+            micropython
+
+
+      - name: Setup MicroPython submodules
+        run: |
+          cd micropython
+
+          git submodule update \
+            --init \
+            --recursive \
+            --depth 1
+
+
+      - name: Clone ESP-IDF
+        run: |
+          git clone \
+            --depth 1 \
+            --branch v5.5.2 \
+            https://github.com/espressif/esp-idf.git \
+            esp-idf
+
+          cd esp-idf
+
+          git submodule update \
+            --init \
+            --recursive \
+            --filter=tree:0
+
+
+      - name: Install ESP-IDF
+        run: |
+          cd esp-idf
+
+          ./install.sh esp32
+
+
+      - name: Build mpy-cross
+        run: |
+          cd micropython
+
+          make -C mpy-cross
+
+
+      - name: Setup ESP32 submodules
+        shell: bash
+        run: |
+          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
+
+          cd "$GITHUB_WORKSPACE/micropython"
+
+          make -C ports/esp32 submodules
+
+
+      - name: Clean previous build
+        run: |
+          rm -rf \
+            micropython/ports/esp32/build-ESP32_GENERIC
+
+
+      - name: Build TARS MicroPython with User C Module
+        shell: bash
+        run: |
+          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
+
+          cd "$GITHUB_WORKSPACE/micropython"
+
+          make -C ports/esp32 \
+            BOARD=ESP32_GENERIC \
+            USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake" \
+            V=1
+
+
+      - name: Verify TARS A2DP source compiled
+        run: |
+          echo "===== SEARCHING BUILD FILES ====="
+
+          BUILD_DIR="micropython/ports/esp32/build-ESP32_GENERIC"
+
+          echo ""
+          echo "Searching for tars_a2dp.c object..."
+
+          find "$BUILD_DIR" -type f | grep "tars_a2dp" || true
+
+          echo ""
+          echo "Searching compile commands..."
+
+          if [ -f "$BUILD_DIR/compile_commands.json" ]; then
+            grep -n "tars_a2dp.c" \
+              "$BUILD_DIR/compile_commands.json" || true
+          fi
+
+
+      - name: Verify TARS A2DP symbol in ELF
+        shell: bash
+        run: |
+          ELF="micropython/ports/esp32/build-ESP32_GENERIC/micropython.elf"
+
+          echo "===== SEARCHING FOR TARS A2DP SYMBOLS ====="
+
+          if [ ! -f "$ELF" ]; then
+            echo "ERROR: micropython.elf not found"
+            exit 1
+          fi
+
+          NM_TOOL=$(find \
+            "$HOME/.espressif/tools" \
+            -name xtensa-esp32-elf-nm \
+            -type f \
+            | head -n 1)
+
+          echo "Using tool: $NM_TOOL"
+
+          if [ -z "$NM_TOOL" ]; then
+            echo "ERROR: xtensa-esp32-elf-nm not found"
+            exit 1
+          fi
+
+          echo ""
+          echo "===== TARS A2DP SYMBOLS ====="
+
+          "$NM_TOOL" \
+            -a \
+            "$ELF" \
+            | grep -i "tars_a2dp" || true
+
+          echo ""
+          echo "===== CHECK OBJECT IN ELF ====="
+
+          "$NM_TOOL" \
+            -a \
+            "$ELF" \
+            | grep -i "tars_a2dp_user_cmodule" \
+            || true
+
+          echo ""
+          echo "===== BUILD VERIFICATION COMPLETE ====="
+
+
+      - name: Prepare firmware
+        run: |
+          mkdir -p output
+
+          cp \
+            micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin \
+            output/TARS-MicroPython-ESP32-UTAMA-V1.bin
+
+
+      - name: Show firmware information
+        run: |
+          echo "===== FIRMWARE INFORMATION ====="
+
+          ls -lh output/
+
+          sha256sum \
+            output/TARS-MicroPython-ESP32-UTAMA-V1.bin
+
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: TARS-MicroPython-ESP32-UTAMA-V1
+          path: output/TARS-MicroPython-ESP32-UTAMA-V1.bin
