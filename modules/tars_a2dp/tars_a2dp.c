@@ -36,9 +36,10 @@
    Little Endian
    Stereo
    44100 Hz
-*/
 
-#define PCM_BUFFER_SIZE        65536
+   16384 bytes is about 0.09 seconds of stereo 44.1kHz audio.
+*/
+#define PCM_BUFFER_SIZE        16384
 
 
 /* ---------------------------------------------------------
@@ -167,13 +168,6 @@ static size_t tars_pcm_read(
 
 /* =========================================================
    A2DP AUDIO DATA CALLBACK
-
-   ESP-IDF calls this function whenever it needs more audio.
-
-   We take PCM from pcm_buffer.
-
-   If there is no audio available:
-   send silence.
    ========================================================= */
 
 static int32_t tars_a2dp_data_callback(
@@ -215,8 +209,8 @@ static int32_t tars_a2dp_data_callback(
 
 
     /*
-       If buffer doesn't contain enough audio,
-       fill remaining bytes with silence.
+       If there isn't enough audio,
+       fill the remaining data with silence.
     */
 
     if (
@@ -239,13 +233,6 @@ static int32_t tars_a2dp_data_callback(
 
 /* =========================================================
    A2DP EVENT CALLBACK
-
-   IMPORTANT:
-   We intentionally use IF / ELSE instead of nested SWITCH
-   for the state values.
-
-   This avoids duplicate case value problems between
-   ESP-IDF versions/configurations.
    ========================================================= */
 
 static void tars_a2dp_event_callback(
@@ -260,9 +247,7 @@ static void tars_a2dp_event_callback(
     }
 
 
-    /* ---------------------------------------------
-       CONNECTION STATE
-       --------------------------------------------- */
+    /* CONNECTION STATE */
 
     if (
         event == ESP_A2D_CONNECTION_STATE_EVT
@@ -338,9 +323,7 @@ static void tars_a2dp_event_callback(
     }
 
 
-    /* ---------------------------------------------
-       AUDIO STATE
-       --------------------------------------------- */
+    /* AUDIO STATE */
 
     if (
         event == ESP_A2D_AUDIO_STATE_EVT
@@ -403,20 +386,13 @@ static void tars_gap_callback(
     switch (event) {
 
 
-        /* ---------------------------------------------
-           DISCOVERY RESULT
-           --------------------------------------------- */
+        /* DISCOVERY RESULT */
 
         case ESP_BT_GAP_DISC_RES_EVT: {
 
             uint8_t *eir =
                 NULL;
 
-
-            /*
-               Search all properties
-               for the EIR device name.
-            */
 
             for (
                 int i = 0;
@@ -504,9 +480,7 @@ static void tars_gap_callback(
         }
 
 
-        /* ---------------------------------------------
-           DISCOVERY STATE
-           --------------------------------------------- */
+        /* DISCOVERY STATE */
 
         case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
 
@@ -1032,12 +1006,6 @@ static MP_DEFINE_CONST_FUN_OBJ_0(tars_a2dp_connect_obj, tars_a2dp_connect);
 
 /* =========================================================
    WRITE PCM AUDIO
-
-   Python:
-
-   tars_a2dp.write(audio_bytes)
-
-   Returns number of bytes accepted.
    ========================================================= */
 
 static mp_obj_t tars_a2dp_write(
