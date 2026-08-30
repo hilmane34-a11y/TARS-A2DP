@@ -55,8 +55,7 @@ tars_bluetooth_user_cmodule = {
     },
 
     .globals =
-        (mp_obj_dict_t *)
-        &tars_bluetooth_globals,
+        (mp_obj_dict_t *)&tars_bluetooth_globals,
 
 };
 
@@ -67,6 +66,5 @@ tars_bluetooth_user_cmodule = {
 
 MP_REGISTER_MODULE(
     MP_QSTR_tars_bluetooth,
-    tars_bluetooth_user_cmodule,
-    MODULE_TARS_BLUETOOTH_ENABLED
+    tars_bluetooth_user_cmodule
 );
