@@ -10,12 +10,22 @@ jobs:
 
     steps:
 
+      # ==================================================
+      # CHECKOUT
+      # ==================================================
+
       - name: Checkout TARS repository
         uses: actions/checkout@v4
+
+
+      # ==================================================
+      # SYSTEM PACKAGES
+      # ==================================================
 
       - name: Install system packages
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             git \
             make \
@@ -34,11 +44,18 @@ jobs:
             dfu-util \
             libusb-1.0-0
 
+
+      # ==================================================
+      # MICROPYTHON
+      # ==================================================
+
       - name: Clone MicroPython
         run: |
-          git clone --depth 1 \
+          git clone \
+            --depth 1 \
             https://github.com/micropython/micropython.git \
             micropython
+
 
       - name: Setup MicroPython submodules
         run: |
@@ -48,6 +65,11 @@ jobs:
             --init \
             --recursive \
             --depth 1
+
+
+      # ==================================================
+      # ESP-IDF
+      # ==================================================
 
       - name: Clone ESP-IDF
         run: |
@@ -64,15 +86,28 @@ jobs:
             --recursive \
             --filter=tree:0
 
+
       - name: Install ESP-IDF
         run: |
           cd esp-idf
+
           ./install.sh esp32
+
+
+      # ==================================================
+      # MPY-CROSS
+      # ==================================================
 
       - name: Build mpy-cross
         run: |
           cd micropython
+
           make -C mpy-cross
+
+
+      # ==================================================
+      # ESP32 SUBMODULES
+      # ==================================================
 
       - name: Setup ESP32 submodules
         shell: bash
@@ -83,6 +118,11 @@ jobs:
 
           make -C ports/esp32 submodules
 
+
+      # ==================================================
+      # INSTALL CUSTOM BOARD
+      # ==================================================
+
       - name: Install TARS custom board
         shell: bash
         run: |
@@ -92,15 +132,15 @@ jobs:
 
           cp \
             "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.h" \
-            "$BOARD_DIR/"
+            "$BOARD_DIR/mpconfigboard.h"
 
           cp \
             "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.cmake" \
-            "$BOARD_DIR/"
+            "$BOARD_DIR/mpconfigboard.cmake"
 
           cp \
             "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" \
-            "$BOARD_DIR/"
+            "$BOARD_DIR/sdkconfig.bluetooth"
 
           echo "=================================================="
           echo "TARS CUSTOM BOARD FILES"
@@ -109,75 +149,51 @@ jobs:
           ls -la "$BOARD_DIR"
 
           echo ""
+
           echo "=================================================="
           echo "SDKCONFIG BLUETOOTH"
           echo "=================================================="
 
-          cat "$BOARD_DIR/sdkconfig.bluetooth" || true
+          cat "$BOARD_DIR/sdkconfig.bluetooth"
 
           echo ""
+
           echo "=================================================="
           echo "MPCONFIGBOARD.H"
           echo "=================================================="
 
-          cat "$BOARD_DIR/mpconfigboard.h" || true
+          cat "$BOARD_DIR/mpconfigboard.h"
 
           echo ""
+
           echo "=================================================="
           echo "MPCONFIGBOARD.CMAKE"
           echo "=================================================="
 
-          cat "$BOARD_DIR/mpconfigboard.cmake" || true
+          cat "$BOARD_DIR/mpconfigboard.cmake"
 
-      - name: Check TARS A2DP source before build
-        shell: bash
-        run: |
-          TARS_FILE="$GITHUB_WORKSPACE/modules/tars_a2dp/tars_a2dp.c"
 
-          echo "=================================================="
-          echo "TARS A2DP SOURCE CHECK"
-          echo "=================================================="
+      # ==================================================
+      # CHECK USER MODULE FILES
+      # ==================================================
 
-          if [ ! -f "$TARS_FILE" ]; then
-            echo "ERROR: tars_a2dp.c NOT FOUND"
-            exit 1
-          fi
-
-          echo "FILE:"
-          echo "$TARS_FILE"
-
-          echo ""
-          echo "=================================================="
-          echo "FULL TARS A2DP SOURCE"
-          echo "=================================================="
-
-          cat "$TARS_FILE"
-
-          echo ""
-          echo "=================================================="
-          echo "IMPORTANT INCLUDES"
-          echo "=================================================="
-
-          grep -n \
-            -E "^#include.*(esp_bt|esp_a2dp|esp_gap|bluetooth|nimble)" \
-            "$TARS_FILE" \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "MP REGISTER MODULE"
-          echo "=================================================="
-
-          grep -n \
-            -E "MP_REGISTER_MODULE" \
-            "$TARS_FILE" \
-            || true
-
-      - name: Check TARS CMake modules
+      - name: Check TARS module files
         shell: bash
         run: |
           echo "=================================================="
-          echo "MAIN USER MODULE CMAKE"
+          echo "MODULES DIRECTORY"
+          echo "=================================================="
+
+          find \
+            "$GITHUB_WORKSPACE/modules" \
+            -maxdepth 3 \
+            -type f \
+            -print
+
+          echo ""
+
+          echo "=================================================="
+          echo "MASTER MICROPYTHON.CMAKE"
           echo "=================================================="
 
           cat \
@@ -185,8 +201,19 @@ jobs:
             || true
 
           echo ""
+
           echo "=================================================="
-          echo "TARS A2DP MODULE CMAKE"
+          echo "TARS A2DP SOURCE"
+          echo "=================================================="
+
+          cat \
+            "$GITHUB_WORKSPACE/modules/tars_a2dp/tars_a2dp.c" \
+            || true
+
+          echo ""
+
+          echo "=================================================="
+          echo "TARS A2DP CMAKE"
           echo "=================================================="
 
           cat \
@@ -194,13 +221,29 @@ jobs:
             || true
 
           echo ""
+
           echo "=================================================="
-          echo "TARS BLUETOOTH MODULE CMAKE"
+          echo "TARS BLUETOOTH SOURCE"
+          echo "=================================================="
+
+          cat \
+            "$GITHUB_WORKSPACE/modules/tars_bluetooth/tars_bluetooth.c" \
+            || true
+
+          echo ""
+
+          echo "=================================================="
+          echo "TARS BLUETOOTH CMAKE"
           echo "=================================================="
 
           cat \
             "$GITHUB_WORKSPACE/modules/tars_bluetooth/micropython.cmake" \
             || true
+
+
+      # ==================================================
+      # BUILD
+      # ==================================================
 
       - name: Build TARS MicroPython A2DP
         id: build_tars
@@ -213,16 +256,15 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/micropython"
 
-          rm -rf ports/esp32/build-TARS_ESP32_A2DP
+          rm -rf \
+            ports/esp32/build-TARS_ESP32_A2DP
 
-          echo "=================================================="
-          echo "STARTING TARS BUILD"
-          echo "=================================================="
-
-          make -C ports/esp32 \
+          make \
+            -C ports/esp32 \
             BOARD=TARS_ESP32_A2DP \
             USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake" \
-            2>&1 | tee "$GITHUB_WORKSPACE/tars_full_build.log"
+            2>&1 | tee \
+            "$GITHUB_WORKSPACE/tars_build_full.log"
 
           BUILD_RESULT=${PIPESTATUS[0]}
 
@@ -234,18 +276,25 @@ jobs:
 
           exit 0
 
+
+      # ==================================================
+      # DIAGNOSE BUILD ERROR
+      # ==================================================
+
       - name: Diagnose build error
         if: always()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
-          FULL_LOG="$GITHUB_WORKSPACE/tars_full_build.log"
+
+          FULL_LOG="$GITHUB_WORKSPACE/tars_build_full.log"
 
           echo "=================================================="
-          echo "FINAL BUILD RESULT"
+          echo "BUILD RESULT"
           echo "=================================================="
 
           echo "BUILD_EXIT_CODE=${BUILD_EXIT_CODE:-unknown}"
+
 
           echo ""
           echo "=================================================="
@@ -254,7 +303,7 @@ jobs:
 
           if [ -f "$FULL_LOG" ]; then
 
-            grep -n -m 30 \
+            grep -n -m 50 \
               -E "fatal error:|error:|undefined reference|CMake Error|FAILED:" \
               "$FULL_LOG" \
               || true
@@ -264,6 +313,7 @@ jobs:
             echo "FULL BUILD LOG NOT FOUND"
 
           fi
+
 
           echo ""
           echo "=================================================="
@@ -282,15 +332,16 @@ jobs:
 
             if [ -n "$FIRST_LINE" ]; then
 
-              START=$((FIRST_LINE - 20))
+              START=$((FIRST_LINE - 30))
 
               if [ "$START" -lt 1 ]; then
                 START=1
               fi
 
-              END=$((FIRST_LINE + 40))
+              END=$((FIRST_LINE + 80))
 
-              sed -n "${START},${END}p" "$FULL_LOG"
+              sed -n "${START},${END}p" \
+                "$FULL_LOG"
 
             else
 
@@ -300,6 +351,7 @@ jobs:
 
           fi
 
+
           echo ""
           echo "=================================================="
           echo "LAST 200 LINES OF BUILD"
@@ -307,9 +359,11 @@ jobs:
 
           if [ -f "$FULL_LOG" ]; then
 
-            tail -n 200 "$FULL_LOG"
+            tail -n 200 \
+              "$FULL_LOG"
 
           fi
+
 
           echo ""
           echo "=================================================="
@@ -320,16 +374,16 @@ jobs:
             "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" \
             || true
 
+
           echo ""
           echo "=================================================="
-          echo "GENERATED SDKCONFIG IMPORTANT OPTIONS"
+          echo "GENERATED SDKCONFIG BLUETOOTH"
           echo "=================================================="
 
           if [ -f "$BUILD/sdkconfig" ]; then
 
             grep -n \
-              -E \
-              "CONFIG_BT_ENABLED|CONFIG_BT_BLUEDROID_ENABLED|CONFIG_BT_CLASSIC_ENABLED|CONFIG_BT_BLE_ENABLED|CONFIG_BT_NIMBLE_ENABLED|CONFIG_BT_A2DP_ENABLE" \
+              -E "^CONFIG_(BT|NIMBLE|BLE)" \
               "$BUILD/sdkconfig" \
               || true
 
@@ -339,23 +393,118 @@ jobs:
 
           fi
 
+
           echo ""
           echo "=================================================="
-          echo "CHECK BLUEDROID HEADERS"
+          echo "A2DP CONFIGURATION"
+          echo "=================================================="
+
+          if [ -f "$BUILD/sdkconfig" ]; then
+
+            grep -n -i \
+              -E "A2DP|AVRC|CLASSIC|BLUEDROID" \
+              "$BUILD/sdkconfig" \
+              || true
+
+          else
+
+            echo "sdkconfig belum ditemukan"
+
+          fi
+
+
+          echo ""
+          echo "=================================================="
+          echo "IMPORTANT BLUETOOTH OPTIONS"
+          echo "=================================================="
+
+          if [ -f "$BUILD/sdkconfig" ]; then
+
+            grep -n \
+              -E \
+              "CONFIG_BT_ENABLED|CONFIG_BT_NIMBLE_ENABLED|CONFIG_BT_BLUEDROID_ENABLED|CONFIG_BT_CLASSIC_ENABLED|CONFIG_BT_BLE_ENABLED" \
+              "$BUILD/sdkconfig" \
+              || true
+
+          fi
+
+
+          echo ""
+          echo "=================================================="
+          echo "SEARCH esp_a2d_source_init"
+          echo "=================================================="
+
+          grep -R -n \
+            "esp_a2d_source_init" \
+            "$GITHUB_WORKSPACE/esp-idf/components/bt" \
+            2>/dev/null \
+            | head -n 100 \
+            || true
+
+
+          echo ""
+          echo "=================================================="
+          echo "SEARCH A2DP SOURCE IMPLEMENTATION"
+          echo "=================================================="
+
+          grep -R -n -i \
+            -E "a2d_source|a2dp.*source|source.*a2dp" \
+            "$GITHUB_WORKSPACE/esp-idf/components/bt" \
+            2>/dev/null \
+            | head -n 200 \
+            || true
+
+
+          echo ""
+          echo "=================================================="
+          echo "CHECK BLUEDROID LIBRARIES"
           echo "=================================================="
 
           find \
-            "$GITHUB_WORKSPACE/esp-idf/components/bt" \
+            "$BUILD" \
             -type f \
-            \( \
-              -name "esp_bt_main.h" -o \
-              -name "esp_a2dp_api.h" -o \
-              -name "esp_gap_bt_api.h" -o \
-              -name "esp_bt.h" \
-            \) \
-            -print \
+            \( -name "*.a" -o -name "*.obj" \) \
             2>/dev/null \
+            | grep \
+              -E "bt|bluetooth|bluedroid|a2dp" \
+            | head -n 200 \
             || true
+
+
+          echo ""
+          echo "=================================================="
+          echo "SEARCH SYMBOL IN STATIC LIBRARIES"
+          echo "=================================================="
+
+          find \
+            "$BUILD" \
+            -type f \
+            -name "*.a" \
+            2>/dev/null \
+            | while read -r LIB; do
+
+                if xtensa-esp32-elf-nm \
+                  "$LIB" \
+                  2>/dev/null \
+                  | grep -q \
+                    "esp_a2d_source_init"; then
+
+                  echo ""
+                  echo "FOUND IN:"
+                  echo "$LIB"
+
+                  xtensa-esp32-elf-nm \
+                    "$LIB" \
+                    2>/dev/null \
+                    | grep \
+                      "esp_a2d_source_init" \
+                    || true
+
+                fi
+
+              done \
+            || true
+
 
           echo ""
           echo "=================================================="
@@ -363,104 +512,37 @@ jobs:
           echo "=================================================="
 
           find \
-            "$GITHUB_WORKSPACE/esp-idf/components/bt" \
+            "$GITHUB_WORKSPACE/esp-idf/components" \
             -type f \
             \( \
-              -name "ble_hs.h" -o \
+              -name "ble_hs.h" \
+              -o \
               -name "nimble_port.h" \
             \) \
             -print \
-            2>/dev/null \
             || true
 
-          echo ""
-          echo "=================================================="
-          echo "CHECK MICROPYTHON NIMBLE SOURCE"
-          echo "=================================================="
-
-          grep -R -n \
-            -E "MICROPY_BLUETOOTH_NIMBLE|modbluetooth_nimble|mpnimbleport" \
-            "$GITHUB_WORKSPACE/micropython/ports/esp32" \
-            "$GITHUB_WORKSPACE/micropython/extmod" \
-            2>/dev/null \
-            | head -n 200 \
-            || true
 
           echo ""
           echo "=================================================="
-          echo "CHECK TARS A2DP INCLUDE LINES"
-          echo "=================================================="
-
-          TARS_FILE="$GITHUB_WORKSPACE/modules/tars_a2dp/tars_a2dp.c"
-
-          if [ -f "$TARS_FILE" ]; then
-
-            grep -n \
-              -E "^#include|esp_bt|esp_a2dp|esp_gap|MP_REGISTER_MODULE" \
-              "$TARS_FILE" \
-              || true
-
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "CHECK MODULE CMAKE CONTENT"
+          echo "CHECK BLUEDROID HEADERS"
           echo "=================================================="
 
           find \
-            "$GITHUB_WORKSPACE/modules" \
-            -name "micropython.cmake" \
+            "$GITHUB_WORKSPACE/esp-idf/components" \
             -type f \
+            \( \
+              -name "esp_bt_main.h" \
+              -o \
+              -name "esp_a2dp_api.h" \
+            \) \
             -print \
-            2>/dev/null \
             || true
 
-          echo ""
-          echo "=================================================="
-          echo "MAIN MODULE CMAKE"
-          echo "=================================================="
-
-          cat \
-            "$GITHUB_WORKSPACE/modules/micropython.cmake" \
-            || true
 
           echo ""
           echo "=================================================="
-          echo "BUILD LOG FILES"
-          echo "=================================================="
-
-          find \
-            "$BUILD/log" \
-            -maxdepth 1 \
-            -type f \
-            -print \
-            2>/dev/null \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "LAST 150 LINES OF IDF STDERR"
-          echo "=================================================="
-
-          for STDERR_FILE in \
-            "$BUILD"/log/idf_py_stderr_output_*; do
-
-            if [ -f "$STDERR_FILE" ]; then
-
-              echo ""
-              echo "----------------------------------------"
-              echo "FILE: $STDERR_FILE"
-              echo "----------------------------------------"
-
-              tail -n 150 "$STDERR_FILE"
-
-            fi
-
-          done
-
-          echo ""
-          echo "=================================================="
-          echo "MODULEDEFS TARS CHECK"
+          echo "MODULEDEFS.COLLECTED TARS"
           echo "=================================================="
 
           if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
@@ -476,15 +558,17 @@ jobs:
 
           fi
 
+
           echo ""
           echo "=================================================="
-          echo "MODULEDEFS.H TARS CHECK"
+          echo "MODULEDEFS.H TARS"
           echo "=================================================="
 
           if [ -f "$BUILD/genhdr/moduledefs.h" ]; then
 
             grep -n \
-              -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
+              -E \
+              "MODULE_DEF_TARS_A2DP|MODULE_DEF_TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
               "$BUILD/genhdr/moduledefs.h" \
               || true
 
@@ -494,35 +578,30 @@ jobs:
 
           fi
 
+
           echo ""
           echo "=================================================="
-          echo "SEARCH ALL BUILD ERRORS"
+          echo "BUILD DIRECTORY STATUS"
           echo "=================================================="
 
           if [ -d "$BUILD" ]; then
 
-            grep -R -n -m 100 \
-              -E "fatal error:|undefined reference|CMake Error|FAILED:" \
-              "$BUILD/log" \
-              2>/dev/null \
-              || true
-
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "FIRMWARE STATUS"
-          echo "=================================================="
-
-          if [ -f "$BUILD/firmware.bin" ]; then
-
-            ls -lh "$BUILD/firmware.bin"
+            find \
+              "$BUILD" \
+              -maxdepth 2 \
+              -type f \
+              | head -n 150
 
           else
 
-            echo "firmware.bin BELUM BERHASIL DIBUAT"
+            echo "Build directory belum ada"
 
           fi
+
+
+      # ==================================================
+      # UPLOAD DIAGNOSTIC
+      # ==================================================
 
       - name: Upload diagnostic logs
         if: always()
@@ -530,11 +609,16 @@ jobs:
         with:
           name: TARS-Build-Diagnostic
           path: |
-            tars_full_build.log
+            tars_build_full.log
             micropython/ports/esp32/build-TARS_ESP32_A2DP/log/
             micropython/ports/esp32/build-TARS_ESP32_A2DP/sdkconfig
             micropython/ports/esp32/build-TARS_ESP32_A2DP/genhdr/
           if-no-files-found: warn
+
+
+      # ==================================================
+      # FINAL BUILD STATUS
+      # ==================================================
 
       - name: Fail workflow if build failed
         if: always()
@@ -555,6 +639,8 @@ jobs:
             echo "FIRST BUILD ERRORS"
             echo "CONTEXT AROUND FIRST ERROR"
             echo "LAST 200 LINES OF BUILD"
+            echo "SEARCH esp_a2d_source_init"
+            echo "SEARCH SYMBOL IN STATIC LIBRARIES"
 
             exit 1
 
@@ -562,6 +648,11 @@ jobs:
 
           echo ""
           echo "TARS BUILD SUCCESS"
+
+
+      # ==================================================
+      # VERIFY MODULES
+      # ==================================================
 
       - name: Verify TARS modules
         if: success()
@@ -573,7 +664,9 @@ jobs:
           echo "CHECK FIRMWARE"
           echo "=================================================="
 
-          ls -lh "$BUILD/firmware.bin"
+          ls -lh \
+            "$BUILD/firmware.bin"
+
 
           echo ""
           echo "=================================================="
@@ -585,21 +678,29 @@ jobs:
             "$BUILD/genhdr/moduledefs.collected" \
             || true
 
+
           echo ""
           echo "=================================================="
           echo "MODULEDEFS.H TARS"
           echo "=================================================="
 
           grep -n \
-            -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
+            -E \
+            "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
             "$BUILD/genhdr/moduledefs.h" \
             || true
+
+
+      # ==================================================
+      # PREPARE FIRMWARE
+      # ==================================================
 
       - name: Prepare firmware
         if: success()
         shell: bash
         run: |
-          mkdir -p output
+          mkdir -p \
+            "$GITHUB_WORKSPACE/output"
 
           cp \
             "$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin" \
@@ -609,12 +710,19 @@ jobs:
           echo "OUTPUT FIRMWARE"
           echo "=================================================="
 
-          ls -lh "$GITHUB_WORKSPACE/output"
+          ls -lh \
+            "$GITHUB_WORKSPACE/output"
+
+
+      # ==================================================
+      # UPLOAD FIRMWARE
+      # ==================================================
 
       - name: Upload firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TARS-MicroPython-ESP32-A2DP
-          path: output/TARS-MicroPython-ESP32-A2DP.bin
+          path: |
+            output/TARS-MicroPython-ESP32-A2DP.bin
           if-no-files-found: error
