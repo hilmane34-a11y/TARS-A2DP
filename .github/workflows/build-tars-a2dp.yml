@@ -1,93 +1,4 @@
-name: Build TARS ESP32 A2DP
-
-on:
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    steps:
-
-      - name: Checkout TARS repository
-        uses: actions/checkout@v4
-
-      - name: Install system packages
-        run: |
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            git \
-            make \
-            gcc \
-            g++ \
-            cmake \
-            ninja-build \
-            python3 \
-            python3-pip \
-            flex \
-            bison \
-            gperf \
-            ccache \
-            libffi-dev \
-            libssl-dev \
-            dfu-util \
-            libusb-1.0-0
-
-      - name: Clone MicroPython
-        run: |
-          git clone \
-            --depth 1 \
-            https://github.com/micropython/micropython.git \
-            micropython
-
-      - name: Setup MicroPython submodules
-        run: |
-          cd micropython
-
-          git submodule update \
-            --init \
-            --recursive \
-            --depth 1
-
-      - name: Clone ESP-IDF
-        run: |
-          git clone \
-            --depth 1 \
-            --branch v5.5.2 \
-            https://github.com/espressif/esp-idf.git \
-            esp-idf
-
-          cd esp-idf
-
-          git submodule update \
-            --init \
-            --recursive \
-            --filter=tree:0
-
-      - name: Install ESP-IDF
-        run: |
-          cd esp-idf
-
-          ./install.sh esp32
-
-      - name: Build mpy-cross
-        run: |
-          cd micropython
-
-          make -C mpy-cross
-
-      - name: Copy TARS Bluetooth component
-        run: |
-          mkdir -p \
-            micropython/ports/esp32/components
-
-          cp -r \
-            components/tars_bt \
-            micropython/ports/esp32/components/
-
-      - name: Create A2DP SDK configuration
+      - name: Create A2DP board configuration
         run: |
           mkdir -p \
             micropython/ports/esp32/boards/TARS_ESP32_A2DP
@@ -117,60 +28,16 @@ jobs:
           )
           EOF
 
-      - name: Setup ESP32 submodules
-        shell: bash
-        run: |
-          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
+          cat >> \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.h \
+            <<'EOF'
 
-          cd "$GITHUB_WORKSPACE/micropython"
+          // TARS menggunakan Bluetooth Classic A2DP.
+          // NimBLE bawaan MicroPython dimatikan.
+          #undef MICROPY_PY_BLUETOOTH
+          #define MICROPY_PY_BLUETOOTH (0)
 
-          make -C ports/esp32 \
-            BOARD=TARS_ESP32_A2DP \
-            submodules
+          #undef MICROPY_PY_BLUETOOTH_LE
+          #define MICROPY_PY_BLUETOOTH_LE (0)
 
-      - name: Build TARS A2DP MicroPython
-        shell: bash
-        run: |
-          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
-
-          cd "$GITHUB_WORKSPACE/micropython"
-
-          rm -rf \
-            ports/esp32/build-TARS_ESP32_A2DP
-
-          make -C ports/esp32 \
-            BOARD=TARS_ESP32_A2DP \
-            USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
-
-      - name: Verify TARS A2DP module
-        run: |
-          ELF="micropython/ports/esp32/build-TARS_ESP32_A2DP/micropython.elf"
-
-          echo "===== VERIFY ELF ====="
-
-          test -f "$ELF"
-
-          NM_TOOL=$(find \
-            "$HOME/.espressif/tools" \
-            -name xtensa-esp32-elf-nm \
-            -type f \
-            | head -n 1)
-
-          echo "===== SEARCH TARS A2DP ====="
-
-          "$NM_TOOL" "$ELF" | \
-            grep -i tars_a2dp || true
-
-      - name: Prepare firmware
-        run: |
-          mkdir -p output
-
-          cp \
-            micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin \
-            output/TARS-MicroPython-ESP32-A2DP.bin
-
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: TARS-MicroPython-ESP32-A2DP
-          path: output/TARS-MicroPython-ESP32-A2DP.bin
+          EOF
