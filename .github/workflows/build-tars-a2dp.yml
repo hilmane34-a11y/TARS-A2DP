@@ -113,7 +113,21 @@ jobs:
           echo "SDKCONFIG BLUETOOTH"
           echo "=================================================="
 
-          cat "$BOARD_DIR/sdkconfig.bluetooth"
+          cat "$BOARD_DIR/sdkconfig.bluetooth" || true
+
+          echo ""
+          echo "=================================================="
+          echo "MPCONFIGBOARD.H"
+          echo "=================================================="
+
+          cat "$BOARD_DIR/mpconfigboard.h" || true
+
+          echo ""
+          echo "=================================================="
+          echo "MPCONFIGBOARD.CMAKE"
+          echo "=================================================="
+
+          cat "$BOARD_DIR/mpconfigboard.cmake" || true
 
       - name: Build TARS MicroPython A2DP
         id: build_tars
@@ -179,12 +193,24 @@ jobs:
 
           echo ""
           echo "=================================================="
+          echo "CHECK IMPORTANT BT OPTIONS"
+          echo "=================================================="
+
+          if [ -f "$BUILD/sdkconfig" ]; then
+            grep -n \
+              -E "CONFIG_BT_NIMBLE_ENABLED|CONFIG_BT_BLUEDROID_ENABLED|CONFIG_BT_CLASSIC_ENABLED|CONFIG_BT_BLE_ENABLED|CONFIG_BT_ENABLED" \
+              "$BUILD/sdkconfig" \
+              || true
+          fi
+
+          echo ""
+          echo "=================================================="
           echo "CHECK NIMBLE DIRECTORIES"
           echo "=================================================="
 
           find \
             "$GITHUB_WORKSPACE/esp-idf/components" \
-            -maxdepth 5 \
+            -maxdepth 6 \
             -type d \
             \( -name "nimble" -o -name "nimble_port" \) \
             -print \
@@ -216,6 +242,48 @@ jobs:
 
           echo ""
           echo "=================================================="
+          echo "CHECK MICROPYTHON BLUETOOTH CONFIG"
+          echo "=================================================="
+
+          grep -R -n \
+            -E "MICROPY_PY_BLUETOOTH|MICROPY_BLUETOOTH_NIMBLE|NIMBLE" \
+            "$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP" \
+            "$GITHUB_WORKSPACE/micropython/ports/esp32" \
+            2>/dev/null \
+            | head -n 150 \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "CHECK ESP32 BLUETOOTH SOURCE SELECTION"
+          echo "=================================================="
+
+          grep -R -n \
+            -E "mpnimbleport|modbluetooth_nimble|MICROPY_BLUETOOTH_NIMBLE" \
+            "$GITHUB_WORKSPACE/micropython/ports/esp32" \
+            "$GITHUB_WORKSPACE/micropython/extmod" \
+            2>/dev/null \
+            | head -n 150 \
+            || true
+
+          echo ""
+          echo "=================================================="
+          echo "CHECK BUILD COMPILE DEFINITIONS"
+          echo "=================================================="
+
+          if [ -f "$BUILD/compile_commands.json" ]; then
+            grep -o \
+              -E "MICROPY_[A-Z0-9_]*BLUETOOTH[A-Z0-9_]*|MICROPY_BLUETOOTH_NIMBLE" \
+              "$BUILD/compile_commands.json" \
+              | sort \
+              | uniq \
+              || true
+          else
+            echo "compile_commands.json belum ditemukan"
+          fi
+
+          echo ""
+          echo "=================================================="
           echo "BUILD LOG FILES"
           echo "=================================================="
 
@@ -229,21 +297,49 @@ jobs:
 
           echo ""
           echo "=================================================="
-          echo "LAST 100 LINES OF IDF STDERR"
+          echo "IDF STDERR FILES"
           echo "=================================================="
 
-          STDERR_FILE=$(find \
+          find \
             "$BUILD/log" \
             -name "idf_py_stderr_output_*" \
             -type f \
+            -print \
             2>/dev/null \
-            | head -n 1)
+            || true
 
-          if [ -n "$STDERR_FILE" ]; then
-            tail -n 100 "$STDERR_FILE"
-          else
-            echo "Tidak ada idf stderr log"
-          fi
+          echo ""
+          echo "=================================================="
+          echo "LAST 150 LINES OF ALL IDF STDERR"
+          echo "=================================================="
+
+          for STDERR_FILE in \
+            "$BUILD"/log/idf_py_stderr_output_*; do
+
+            if [ -f "$STDERR_FILE" ]; then
+
+              echo ""
+              echo "----------------------------------------"
+              echo "FILE: $STDERR_FILE"
+              echo "----------------------------------------"
+
+              tail -n 150 "$STDERR_FILE"
+
+            fi
+
+          done
+
+          echo ""
+          echo "=================================================="
+          echo "SEARCH NIMBLE ERROR"
+          echo "=================================================="
+
+          grep -R -n \
+            -E "ble_hs.h|nimble_port.h|fatal error" \
+            "$BUILD/log" \
+            2>/dev/null \
+            | tail -n 100 \
+            || true
 
           echo ""
           echo "=================================================="
@@ -251,12 +347,35 @@ jobs:
           echo "=================================================="
 
           if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
+
             grep -n \
               -E "tars_a2dp|tars_bluetooth" \
               "$BUILD/genhdr/moduledefs.collected" \
               || true
+
           else
+
             echo "moduledefs.collected belum dibuat"
+
+          fi
+
+          echo ""
+          echo "=================================================="
+          echo "BUILD DIRECTORY STATUS"
+          echo "=================================================="
+
+          if [ -d "$BUILD" ]; then
+
+            find \
+              "$BUILD" \
+              -maxdepth 2 \
+              -type f \
+              | head -n 100
+
+          else
+
+            echo "Build directory belum ada"
+
           fi
 
       - name: Upload diagnostic logs
@@ -280,9 +399,12 @@ jobs:
           echo "BUILD_EXIT_CODE=${BUILD_EXIT_CODE:-unknown}"
 
           if [ "${BUILD_EXIT_CODE:-1}" != "0" ]; then
+
             echo ""
             echo "TARS BUILD FAILED"
+
             exit 1
+
           fi
 
           echo ""
