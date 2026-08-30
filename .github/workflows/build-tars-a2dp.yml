@@ -156,6 +156,8 @@ jobs:
       - name: Verify modules linked into firmware
         shell: bash
         run: |
+          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
+
           ELF="micropython/ports/esp32/build-ESP32_GENERIC/micropython.elf"
 
           echo "===== CHECK ELF EXISTS ====="
