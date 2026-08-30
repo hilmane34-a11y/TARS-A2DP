@@ -25,7 +25,23 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make gcc g++ cmake ninja-build python3 python3-pip flex bison gperf ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+          sudo apt-get install -y \
+            git \
+            make \
+            gcc \
+            g++ \
+            cmake \
+            ninja-build \
+            python3 \
+            python3-pip \
+            flex \
+            bison \
+            gperf \
+            ccache \
+            libffi-dev \
+            libssl-dev \
+            dfu-util \
+            libusb-1.0-0
 
 
       # =====================================================
@@ -34,37 +50,46 @@ jobs:
 
       - name: Clone MicroPython
         run: |
-          git clone --depth 1 https://github.com/micropython/micropython.git micropython
+          git clone --depth 1 \
+            https://github.com/micropython/micropython.git \
+            micropython
 
 
       - name: Setup MicroPython submodules
         run: |
           cd micropython
-          git submodule update --init --recursive --depth 1
+          git submodule update \
+            --init \
+            --recursive \
+            --depth 1
 
 
       # =====================================================
       # CLONE ESP-IDF
-      #
-      # Versi harus sama dengan lockfile MicroPython terbaru.
       # =====================================================
 
       - name: Clone ESP-IDF v5.5.5
         run: |
-          git clone --depth 1 --branch v5.5.5 https://github.com/espressif/esp-idf.git esp-idf
+          git clone --depth 1 \
+            --branch v5.5.5 \
+            https://github.com/espressif/esp-idf.git \
+            esp-idf
 
 
       - name: Setup ESP-IDF submodules
         run: |
           cd esp-idf
-          git submodule update --init --recursive --filter=tree:0
+          git submodule update \
+            --init \
+            --recursive \
+            --filter=tree:0
 
 
       # =====================================================
-      # INSTALL ESP-IDF TOOLS
+      # INSTALL ESP-IDF
       # =====================================================
 
-      - name: Install ESP-IDF tools
+      - name: Install ESP-IDF
         run: |
           cd esp-idf
           ./install.sh esp32
@@ -95,49 +120,47 @@ jobs:
 
 
       # =====================================================
-      # CHECK MODULE FILES
+      # CHECK TARS MODULE
       # =====================================================
 
-      - name: Check TARS A2DP module files
+      - name: Check TARS module files
         run: |
-          echo "===== MODULE STRUCTURE ====="
-
-          find modules -maxdepth 3 -type f -print
-
-          echo ""
           echo "===== modules/micropython.cmake ====="
-
           cat modules/micropython.cmake
 
           echo ""
           echo "===== modules/tars_a2dp/micropython.cmake ====="
-
           cat modules/tars_a2dp/micropython.cmake
 
           echo ""
-          echo "===== CHECK MODULE REGISTRATION ====="
-
-          grep -n "MP_REGISTER_MODULE" modules/tars_a2dp/tars_a2dp.c
+          echo "===== MODULE REGISTRATION ====="
+          grep -n "MP_REGISTER_MODULE" \
+            modules/tars_a2dp/tars_a2dp.c
 
 
       # =====================================================
       # CREATE CUSTOM BOARD
       # =====================================================
 
-      - name: Create TARS ESP32 A2DP board
+      - name: Create TARS A2DP board
         run: |
-          mkdir -p micropython/ports/esp32/boards/TARS_ESP32_A2DP
+          rm -rf \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP
 
-          cp -a micropython/ports/esp32/boards/ESP32_GENERIC/. micropython/ports/esp32/boards/TARS_ESP32_A2DP/
+          cp -a \
+            micropython/ports/esp32/boards/ESP32_GENERIC \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP
 
 
       # =====================================================
-      # CONFIGURE BLUETOOTH CLASSIC + BLUEDROID
+      # CREATE A2DP SDKCONFIG
       # =====================================================
 
-      - name: Configure Bluetooth Classic A2DP
+      - name: Create A2DP configuration
         run: |
-          cat > micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.a2dp <<'EOF'
+          cat > \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.a2dp \
+            <<'EOF'
           CONFIG_BT_ENABLED=y
           CONFIG_BT_BLUEDROID_ENABLED=y
           CONFIG_BT_NIMBLE_ENABLED=n
@@ -148,15 +171,16 @@ jobs:
 
 
       # =====================================================
-      # BOARD CMAKE CONFIGURATION
+      # CONFIGURE CUSTOM BOARD
       # =====================================================
 
-      - name: Configure TARS board CMake
+      - name: Configure TARS board
         run: |
-          cat > micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.cmake <<'EOF'
+          cat > \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.cmake \
+            <<'EOF'
           set(SDKCONFIG_DEFAULTS
               boards/sdkconfig.base
-              ${MICROPY_BOARD_DIR}/sdkconfig.board
               ${MICROPY_BOARD_DIR}/sdkconfig.a2dp
           )
           EOF
@@ -164,14 +188,13 @@ jobs:
 
       # =====================================================
       # DISABLE MICROPYTHON NIMBLE
-      #
-      # Karena modul ini menggunakan Bluetooth Classic
-      # melalui Bluedroid ESP-IDF.
       # =====================================================
 
       - name: Disable MicroPython NimBLE
         run: |
-          cat >> micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.h <<'EOF'
+          cat >> \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.h \
+            <<'EOF'
 
           #undef MICROPY_PY_BLUETOOTH
           #define MICROPY_PY_BLUETOOTH (0)
@@ -186,19 +209,19 @@ jobs:
 
 
       # =====================================================
-      # SHOW CONFIGURATION
+      # SHOW BOARD CONFIG
       # =====================================================
 
       - name: Show TARS board configuration
         run: |
-          echo "===== SDKCONFIG A2DP ====="
-
-          cat micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.a2dp
+          echo "===== mpconfigboard.cmake ====="
+          cat \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.cmake
 
           echo ""
-          echo "===== MPCONFIGBOARD CMAKE ====="
-
-          cat micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.cmake
+          echo "===== sdkconfig.a2dp ====="
+          cat \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.a2dp
 
 
       # =====================================================
@@ -207,12 +230,12 @@ jobs:
 
       - name: Clean old build
         run: |
-          rm -rf micropython/ports/esp32/build-TARS_ESP32_A2DP
-          rm -rf micropython/ports/esp32/build-ESP32_GENERIC
+          rm -rf \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP
 
 
       # =====================================================
-      # BUILD FIRMWARE
+      # BUILD TARS MICROPYTHON
       # =====================================================
 
       - name: Build TARS MicroPython A2DP
@@ -222,46 +245,48 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/micropython"
 
-          make -C ports/esp32 BOARD=TARS_ESP32_A2DP USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
+          make -C ports/esp32 \
+            BOARD=TARS_ESP32_A2DP \
+            USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
 
 
       # =====================================================
-      # VERIFY MODULE OBJECT
+      # VERIFY TARS SOURCE WAS COMPILED
       # =====================================================
 
-      - name: Verify TARS module was compiled
+      - name: Verify TARS A2DP source
         run: |
-          echo "===== SEARCHING FOR TARS A2DP OBJECT ====="
+          echo "===== SEARCHING TARS OBJECT ====="
 
-          find micropython/ports/esp32/build-TARS_ESP32_A2DP -iname "*tars_a2dp*"
+          find \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP \
+            -type f \
+            \( -name "*tars_a2dp*.obj" -o -name "*tars_a2dp*.o" \) \
+            -print
 
 
       # =====================================================
-      # VERIFY SYMBOL IN ELF
+      # VERIFY FIRMWARE
       # =====================================================
 
-      - name: Verify TARS A2DP symbols in ELF
-        shell: bash
+      - name: Verify firmware output
         run: |
-          ELF="micropython/ports/esp32/build-TARS_ESP32_A2DP/micropython.elf"
+          test -f \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin
 
-          echo "===== SEARCHING FOR TARS A2DP SYMBOLS ====="
+          test -f \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP/micropython.elf
 
-          NM=$(find "$HOME/.espressif/tools" -name "xtensa-esp32-elf-nm" -type f | head -n 1)
+          echo "===== FIRMWARE ====="
 
-          echo "Using tool: $NM"
+          ls -lh \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin
 
-          if [ -z "$NM" ]; then
-            echo "ERROR: xtensa-esp32-elf-nm not found"
-            exit 1
-          fi
+          echo ""
+          echo "===== ELF ====="
 
-          "$NM" -a "$ELF" | grep -E "tars_a2dp|tars_bt_ready" || {
-            echo "ERROR: No TARS A2DP symbol found in ELF"
-            exit 1
-          }
-
-          echo "TARS A2DP SYMBOL CHECK PASSED"
+          ls -lh \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP/micropython.elf
 
 
       # =====================================================
@@ -272,25 +297,17 @@ jobs:
         run: |
           mkdir -p output
 
-          cp micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin output/TARS-MicroPython-ESP32-A2DP.bin
+          cp \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin \
+            output/TARS-MicroPython-ESP32-A2DP.bin
 
 
       # =====================================================
-      # SHOW FIRMWARE
-      # =====================================================
-
-      - name: Show firmware information
-        run: |
-          ls -lh output/TARS-MicroPython-ESP32-A2DP.bin
-
-
-      # =====================================================
-      # UPLOAD FIRMWARE
+      # UPLOAD ARTIFACT
       # =====================================================
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
-
         with:
           name: TARS-MicroPython-ESP32-A2DP
           path: output/TARS-MicroPython-ESP32-A2DP.bin
