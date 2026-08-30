@@ -13,7 +13,6 @@ jobs:
       - name: Checkout TARS repository
         uses: actions/checkout@v4
 
-
       - name: Check module files
         run: |
           echo "===== MODULE STRUCTURE ====="
@@ -31,7 +30,6 @@ jobs:
           echo "===== BLUETOOTH SOURCE ====="
           cat modules/tars_bluetooth/tars_bluetooth.c
 
-
       - name: Verify module files
         run: |
           test -f modules/micropython.cmake
@@ -39,7 +37,6 @@ jobs:
           test -f modules/tars_bluetooth/tars_bluetooth.c
 
           echo "ALL TARS MODULE FILES FOUND"
-
 
       - name: Install system packages
         run: |
@@ -61,8 +58,8 @@ jobs:
             libffi-dev \
             libssl-dev \
             dfu-util \
-            libusb-1.0-0
-
+            libusb-1.0-0 \
+            binutils
 
       - name: Clone MicroPython
         run: |
@@ -70,7 +67,6 @@ jobs:
             --depth 1 \
             https://github.com/micropython/micropython.git \
             micropython
-
 
       - name: Setup MicroPython submodules
         run: |
@@ -80,7 +76,6 @@ jobs:
             --init \
             --recursive \
             --depth 1
-
 
       - name: Clone ESP-IDF
         run: |
@@ -97,20 +92,17 @@ jobs:
             --recursive \
             --filter=tree:0
 
-
       - name: Install ESP-IDF
         run: |
           cd esp-idf
 
           ./install.sh esp32
 
-
       - name: Build mpy-cross
         run: |
           cd micropython
 
           make -C mpy-cross
-
 
       - name: Setup ESP32 submodules
         shell: bash
@@ -120,7 +112,6 @@ jobs:
           cd "$GITHUB_WORKSPACE/micropython"
 
           make -C ports/esp32 submodules
-
 
       - name: Build TARS MicroPython
         shell: bash
@@ -135,7 +126,6 @@ jobs:
             BOARD=ESP32_GENERIC \
             USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake" \
             V=1
-
 
       - name: Verify TARS modules compiled
         run: |
@@ -163,6 +153,29 @@ jobs:
             2>/dev/null \
             || true
 
+      - name: Verify modules linked into firmware
+        shell: bash
+        run: |
+          ELF="micropython/ports/esp32/build-ESP32_GENERIC/micropython.elf"
+
+          echo "===== CHECK ELF EXISTS ====="
+          test -f "$ELF"
+
+          echo ""
+          echo "===== SEARCH MODULE SYMBOLS ====="
+
+          xtensa-esp32-elf-nm "$ELF" \
+            | grep -E \
+              "tars_a2dp_user_cmodule|tars_bluetooth_user_cmodule" \
+            || true
+
+          echo ""
+          echo "===== SEARCH MODULE NAMES IN ELF ====="
+
+          strings "$ELF" \
+            | grep -E \
+              "^tars_a2dp$|^tars_bluetooth$" \
+            || true
 
       - name: Prepare firmware
         run: |
@@ -171,7 +184,6 @@ jobs:
           cp \
             micropython/ports/esp32/build-ESP32_GENERIC/firmware.bin \
             output/TARS-MicroPython-ESP32-UTAMA-V1.bin
-
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
