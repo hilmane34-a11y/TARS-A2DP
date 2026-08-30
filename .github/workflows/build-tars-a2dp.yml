@@ -71,11 +71,11 @@ jobs:
       # CLONE ESP-IDF
       # =====================================================
 
-      - name: Clone ESP-IDF v5.5.2
+      - name: Clone ESP-IDF v5.5.5
         run: |
           git clone \
             --depth 1 \
-            --branch v5.5.2 \
+            --branch branch v5.5.5 \
             https://github.com/espressif/esp-idf.git \
             esp-idf
 
