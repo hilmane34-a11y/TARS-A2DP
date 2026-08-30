@@ -10,8 +10,17 @@ jobs:
 
     steps:
 
+      # =====================================================
+      # CHECKOUT REPOSITORY
+      # =====================================================
+
       - name: Checkout TARS repository
         uses: actions/checkout@v4
+
+
+      # =====================================================
+      # SYSTEM PACKAGES
+      # =====================================================
 
       - name: Install system packages
         run: |
@@ -35,11 +44,18 @@ jobs:
             dfu-util \
             libusb-1.0-0
 
+
+      # =====================================================
+      # CLONE MICROPYTHON
+      # =====================================================
+
       - name: Clone MicroPython
         run: |
-          git clone --depth 1 \
+          git clone \
+            --depth 1 \
             https://github.com/micropython/micropython.git \
             micropython
+
 
       - name: Setup MicroPython submodules
         run: |
@@ -50,7 +66,12 @@ jobs:
             --recursive \
             --depth 1
 
-      - name: Clone ESP-IDF
+
+      # =====================================================
+      # CLONE ESP-IDF
+      # =====================================================
+
+      - name: Clone ESP-IDF v5.5.2
         run: |
           git clone \
             --depth 1 \
@@ -58,6 +79,9 @@ jobs:
             https://github.com/espressif/esp-idf.git \
             esp-idf
 
+
+      - name: Setup ESP-IDF submodules
+        run: |
           cd esp-idf
 
           git submodule update \
@@ -65,11 +89,21 @@ jobs:
             --recursive \
             --filter=tree:0
 
-      - name: Install ESP-IDF
+
+      # =====================================================
+      # INSTALL ESP-IDF TOOLCHAIN
+      # =====================================================
+
+      - name: Install ESP-IDF tools
         run: |
           cd esp-idf
 
           ./install.sh esp32
+
+
+      # =====================================================
+      # BUILD MPY-CROSS TERLEBIH DAHULU
+      # =====================================================
 
       - name: Build mpy-cross
         run: |
@@ -77,16 +111,55 @@ jobs:
 
           make -C mpy-cross
 
-      - name: Copy TARS Bluetooth component
+
+      # =====================================================
+      # SETUP ESP32 SUBMODULES
+      # =====================================================
+
+      - name: Setup ESP32 submodules
+        shell: bash
         run: |
-          mkdir -p \
-            micropython/ports/esp32/components
+          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
-          cp -r \
-            components/tars_bt \
-            micropython/ports/esp32/components/
+          cd "$GITHUB_WORKSPACE/micropython"
 
-      - name: Create A2DP board configuration
+          make -C ports/esp32 submodules
+
+
+      # =====================================================
+      # CHECK TARS MODULE FILES
+      # =====================================================
+
+      - name: Check TARS A2DP module files
+        run: |
+          echo "===== REPOSITORY MODULE STRUCTURE ====="
+
+          find modules -maxdepth 3 -type f -print
+
+          echo ""
+          echo "===== TOP LEVEL MODULE CMAKE ====="
+
+          cat modules/micropython.cmake
+
+          echo ""
+          echo "===== TARS MODULE CMAKE ====="
+
+          cat modules/tars_a2dp/micropython.cmake
+
+          echo ""
+          echo "===== TARS A2DP C FILE ====="
+
+          grep \
+            -n \
+            "MP_REGISTER_MODULE" \
+            modules/tars_a2dp/tars_a2dp.c
+
+
+      # =====================================================
+      # CREATE CUSTOM BOARD
+      # =====================================================
+
+      - name: Create TARS A2DP board
         run: |
           mkdir -p \
             micropython/ports/esp32/boards/TARS_ESP32_A2DP
@@ -95,6 +168,13 @@ jobs:
             micropython/ports/esp32/boards/ESP32_GENERIC/. \
             micropython/ports/esp32/boards/TARS_ESP32_A2DP/
 
+
+      # =====================================================
+      # ESP-IDF BLUETOOTH CONFIGURATION
+      # =====================================================
+
+      - name: Configure Bluetooth Classic A2DP
+        run: |
           cat > \
             micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.a2dp \
             <<'EOF'
@@ -104,74 +184,174 @@ jobs:
           CONFIG_BT_CLASSIC_ENABLED=y
           CONFIG_BT_A2DP_ENABLE=y
           CONFIG_BT_SPP_ENABLED=y
-          CONFIG_BTDM_CTRL_MODE_BTDM=y
           EOF
 
+
+      # =====================================================
+      # BOARD CMAKE CONFIGURATION
+      # =====================================================
+
+      - name: Configure TARS board CMake
+        run: |
           cat > \
             micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.cmake \
             <<'EOF'
           set(SDKCONFIG_DEFAULTS
               boards/sdkconfig.base
+              ${MICROPY_BOARD_DIR}/sdkconfig.board
               ${MICROPY_BOARD_DIR}/sdkconfig.a2dp
           )
           EOF
 
+
+      # =====================================================
+      # DISABLE MICROPYTHON NIMBLE
+      #
+      # TARS A2DP memakai Bluetooth Classic + Bluedroid
+      # langsung dari ESP-IDF.
+      # =====================================================
+
+      - name: Disable MicroPython NimBLE
+        run: |
           cat >> \
             micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.h \
             <<'EOF'
 
-          // TARS menggunakan Bluetooth Classic A2DP.
+          // TARS A2DP menggunakan Bluetooth Classic + Bluedroid.
+          // Backend NimBLE MicroPython tidak digunakan.
+
           #undef MICROPY_PY_BLUETOOTH
           #define MICROPY_PY_BLUETOOTH (0)
+
+          #undef MICROPY_PY_BLUETOOTH_NIMBLE
+          #define MICROPY_PY_BLUETOOTH_NIMBLE (0)
 
           #undef MICROPY_PY_BLUETOOTH_LE
           #define MICROPY_PY_BLUETOOTH_LE (0)
 
           EOF
 
-      - name: Setup ESP32 submodules
-        shell: bash
+
+      # =====================================================
+      # SHOW FINAL BOARD CONFIG
+      # =====================================================
+
+      - name: Show final TARS board configuration
         run: |
-          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
+          echo "===== mpconfigboard.cmake ====="
 
-          cd "$GITHUB_WORKSPACE/micropython"
+          cat \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.cmake
 
-          make -C ports/esp32 \
-            BOARD=TARS_ESP32_A2DP \
-            submodules
+          echo ""
+          echo "===== sdkconfig.a2dp ====="
 
-      - name: Build TARS A2DP MicroPython
-        shell: bash
+          cat \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.a2dp
+
+          echo ""
+          echo "===== Bluetooth config in mpconfigboard.h ====="
+
+          tail -n 30 \
+            micropython/ports/esp32/boards/TARS_ESP32_A2DP/mpconfigboard.h
+
+
+      # =====================================================
+      # CLEAN OLD BUILD
+      # =====================================================
+
+      - name: Clean old build
         run: |
-          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
-
-          cd "$GITHUB_WORKSPACE/micropython"
+          rm -rf \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP
 
           rm -rf \
-            ports/esp32/build-TARS_ESP32_A2DP
+            micropython/ports/esp32/build-ESP32_GENERIC
+
+
+      # =====================================================
+      # BUILD TARS MICROPYTHON
+      # =====================================================
+
+      - name: Build TARS MicroPython A2DP
+        shell: bash
+        run: |
+          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
+
+          cd "$GITHUB_WORKSPACE/micropython"
 
           make -C ports/esp32 \
             BOARD=TARS_ESP32_A2DP \
             USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake"
 
-      - name: Verify TARS A2DP module
+
+      # =====================================================
+      # VERIFY MODULE OBJECT FILE EXISTS
+      # =====================================================
+
+      - name: Verify TARS module was compiled
+        run: |
+          echo "===== SEARCHING FOR TARS OBJECT FILE ====="
+
+          find \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP \
+            -name "*tars_a2dp*.obj" \
+            -o \
+            -name "*tars_a2dp*.o"
+
+          echo ""
+          echo "===== SEARCHING BUILD FILES ====="
+
+          grep -R \
+            "tars_a2dp.c" \
+            micropython/ports/esp32/build-TARS_ESP32_A2DP \
+            2>/dev/null \
+            | head -20 || true
+
+
+      # =====================================================
+      # VERIFY SYMBOL IN ELF
+      # =====================================================
+
+      - name: Verify TARS A2DP symbols in ELF
+        shell: bash
         run: |
           ELF="micropython/ports/esp32/build-TARS_ESP32_A2DP/micropython.elf"
 
-          echo "===== VERIFY ELF ====="
+          echo "===== SEARCHING FOR TARS A2DP SYMBOLS ====="
 
-          test -f "$ELF"
-
-          NM_TOOL=$(find \
+          NM=$(find \
             "$HOME/.espressif/tools" \
-            -name xtensa-esp32-elf-nm \
+            -name "xtensa-esp32-elf-nm" \
             -type f \
             | head -n 1)
 
-          echo "===== TARS A2DP SYMBOLS ====="
+          echo "Using tool: $NM"
 
-          "$NM_TOOL" "$ELF" | \
-            grep -i tars_a2dp || true
+          if [ -z "$NM" ]; then
+            echo "ERROR: xtensa-esp32-elf-nm not found"
+            exit 1
+          fi
+
+          "$NM" \
+            -a \
+            "$ELF" \
+            | grep \
+            -E \
+            "tars_a2dp|tars_bt_ready" \
+            || {
+              echo ""
+              echo "ERROR: No TARS A2DP symbol found in ELF"
+              exit 1
+            }
+
+          echo ""
+          echo "TARS A2DP SYMBOL CHECK PASSED"
+
+
+      # =====================================================
+      # PREPARE FIRMWARE
+      # =====================================================
 
       - name: Prepare firmware
         run: |
@@ -181,8 +361,30 @@ jobs:
             micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin \
             output/TARS-MicroPython-ESP32-A2DP.bin
 
+
+      # =====================================================
+      # SHOW FIRMWARE INFO
+      # =====================================================
+
+      - name: Show firmware information
+        run: |
+          echo "===== FIRMWARE FILE ====="
+
+          ls -lh \
+            output/TARS-MicroPython-ESP32-A2DP.bin
+
+          echo ""
+          echo "===== BUILD COMPLETE ====="
+
+
+      # =====================================================
+      # UPLOAD ARTIFACT
+      # =====================================================
+
       - name: Upload firmware
         uses: actions/upload-artifact@v4
+
         with:
           name: TARS-MicroPython-ESP32-A2DP
           path: output/TARS-MicroPython-ESP32-A2DP.bin
+          if-no-files-found: error
