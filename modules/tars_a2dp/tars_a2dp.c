@@ -89,6 +89,15 @@ static size_t tars_pcm_write(
 
     size_t written = 0;
 
+
+    if (
+        data == NULL ||
+        len == 0
+    ) {
+        return 0;
+    }
+
+
     while (
         written < len &&
         pcm_used < PCM_BUFFER_SIZE
@@ -110,6 +119,7 @@ static size_t tars_pcm_write(
 
     }
 
+
     return written;
 
 }
@@ -125,6 +135,15 @@ static size_t tars_pcm_read(
 ) {
 
     size_t read = 0;
+
+
+    if (
+        data == NULL ||
+        len == 0
+    ) {
+        return 0;
+    }
+
 
     while (
         read < len &&
@@ -147,6 +166,7 @@ static size_t tars_pcm_read(
 
     }
 
+
     return read;
 
 }
@@ -156,6 +176,11 @@ static size_t tars_pcm_read(
    A2DP AUDIO DATA CALLBACK
 
    ESP-IDF memanggil callback ini saat membutuhkan PCM.
+
+   PERBAIKAN PENTING:
+   Jika PCM kosong, return 0.
+   Jangan terus mengirim silence karena dapat membuat
+   antrean Bluetooth penuh.
    ========================================================= */
 
 static int32_t tars_a2dp_data_callback(
@@ -172,55 +197,37 @@ static int32_t tars_a2dp_data_callback(
 
 
     /*
-       Jika belum terhubung,
-       kirim silence.
+       Jangan kirim data sebelum audio stream aktif.
     */
 
     if (
-        !tars_a2dp_connected
+        !tars_audio_started
     ) {
-
-        memset(
-            data,
-            0,
-            (size_t)len
-        );
-
-        return len;
-
+        return 0;
     }
 
 
-    size_t requested =
-        (size_t)len;
-
+    /*
+       Ambil PCM yang benar-benar tersedia.
+    */
 
     size_t received =
         tars_pcm_read(
             data,
-            requested
+            (size_t)len
         );
 
 
     /*
-       Jika PCM kurang,
-       isi sisanya dengan silence.
+       PENTING:
+
+       Jika PCM buffer kosong, received = 0.
+
+       Jangan memset silence lalu return len.
+       Return hanya jumlah byte yang benar-benar ada.
     */
 
-    if (
-        received < requested
-    ) {
-
-        memset(
-            data + received,
-            0,
-            requested - received
-        );
-
-    }
-
-
-    return len;
+    return (int32_t)received;
 
 }
 
@@ -269,6 +276,8 @@ static void tars_a2dp_event_callback(
                     tars_status_text =
                         "A2DP DISCONNECTED";
 
+                    tars_pcm_clear();
+
                     break;
 
 
@@ -279,6 +288,9 @@ static void tars_a2dp_event_callback(
 
                     tars_a2dp_connecting =
                         true;
+
+                    tars_audio_started =
+                        false;
 
                     tars_status_text =
                         "A2DP CONNECTING";
@@ -1032,8 +1044,10 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 /* =========================================================
    PLAY
 
-   Mencoba memulai streaming audio A2DP
-   setelah headset sudah terhubung.
+   Memulai streaming A2DP.
+
+   Sebaiknya PCM sudah dimasukkan terlebih dahulu
+   menggunakan write() sebelum play().
    ========================================================= */
 
 static mp_obj_t tars_a2dp_play(void) {
@@ -1074,6 +1088,24 @@ static mp_obj_t tars_a2dp_play(void) {
             "A2DP AUDIO ALREADY STREAMING",
             strlen(
                 "A2DP AUDIO ALREADY STREAMING"
+            )
+        );
+
+    }
+
+
+    /*
+       Jangan mulai stream jika PCM benar-benar kosong.
+    */
+
+    if (
+        pcm_used == 0
+    ) {
+
+        return mp_obj_new_str(
+            "ERROR: PCM BUFFER EMPTY - WRITE AUDIO FIRST",
+            strlen(
+                "ERROR: PCM BUFFER EMPTY - WRITE AUDIO FIRST"
             )
         );
 
@@ -1154,6 +1186,8 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
    Python:
 
    tars_a2dp.write(audio_bytes)
+
+   Data akan dimasukkan ke PCM ring buffer.
    ========================================================= */
 
 static mp_obj_t tars_a2dp_write(
