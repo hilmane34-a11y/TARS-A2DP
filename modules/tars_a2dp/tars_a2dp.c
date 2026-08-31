@@ -21,13 +21,6 @@
    Scan + Connect
    PCM Streaming
    Internal Tone Test
-
-   AUDIO REVISION:
-   - Bluetooth scan/connect system unchanged
-   - Audio callback kept lightweight
-   - PCM buffer access simplified
-   - Silence returned when no PCM data
-   - Tone generation kept inside callback only
    ========================================================= */
 
 
@@ -160,7 +153,7 @@ static size_t tars_pcm_read(
     size_t len
 )
 {
-    size_t read_count = 0;
+    size_t read = 0;
 
     if (
         data == NULL ||
@@ -170,10 +163,10 @@ static size_t tars_pcm_read(
     }
 
     while (
-        read_count < len &&
+        read < len &&
         pcm_used > 0
     ) {
-        data[read_count] =
+        data[read] =
             pcm_buffer[pcm_read_pos];
 
         pcm_read_pos++;
@@ -185,20 +178,20 @@ static size_t tars_pcm_read(
         }
 
         pcm_used--;
-        read_count++;
+        read++;
     }
 
-    return read_count;
+    return read;
 }
 
 
 /* =========================================================
    GENERATE INTERNAL TONE
 
-   Square wave
-   16-bit signed
-   Stereo
-   Little Endian
+   REVISED:
+   - Entire output buffer initialized.
+   - Phase remains continuous between callbacks.
+   - Stereo 16-bit PCM little endian.
    ========================================================= */
 
 static int32_t tars_generate_tone(
@@ -212,6 +205,28 @@ static int32_t tars_generate_tone(
     ) {
         return 0;
     }
+
+    /*
+       Clear entire requested buffer first.
+
+       This guarantees that any trailing bytes
+       are valid silence.
+    */
+
+    memset(
+        data,
+        0,
+        (size_t)len
+    );
+
+    /*
+       One stereo frame:
+
+       LEFT  = 16-bit = 2 bytes
+       RIGHT = 16-bit = 2 bytes
+
+       Total = 4 bytes
+    */
 
     int32_t usable_len =
         len - (len % 4);
@@ -233,6 +248,13 @@ static int32_t tars_generate_tone(
     ) {
         int16_t sample;
 
+        /*
+           Square wave.
+
+           Lower amplitude prevents unnecessary
+           clipping during the test.
+        */
+
         if (
             tars_tone_phase &
             0x80000000UL
@@ -242,6 +264,10 @@ static int32_t tars_generate_tone(
         else {
             sample = -3000;
         }
+
+        /*
+           LEFT CHANNEL
+        */
 
         data[position + 0] =
             (uint8_t)(
@@ -253,6 +279,10 @@ static int32_t tars_generate_tone(
                 (sample >> 8) & 0xFF
             );
 
+        /*
+           RIGHT CHANNEL
+        */
+
         data[position + 2] =
             (uint8_t)(
                 sample & 0xFF
@@ -263,30 +293,37 @@ static int32_t tars_generate_tone(
                 (sample >> 8) & 0xFF
             );
 
-        position += 4;
+        /*
+           IMPORTANT:
+
+           Do not reset this phase inside
+           the callback.
+
+           It must continue across calls.
+        */
 
         tars_tone_phase +=
             phase_increment;
+
+        position += 4;
     }
 
-    return usable_len;
+    /*
+       Return the full requested length.
+
+       Remaining bytes, if any, were already
+       filled with zero by memset().
+    */
+
+    return len;
 }
 
 
 /* =========================================================
    A2DP AUDIO DATA CALLBACK
 
-   PENTING:
-   Callback ini hanya menyediakan PCM.
-
-   Tidak melakukan:
-   - connect
-   - disconnect
-   - scan
-   - media control
-   - Bluetooth API lain
-
-   Ini menjaga callback tetap ringan.
+   REVISED:
+   Always provides a fully initialized buffer.
    ========================================================= */
 
 static int32_t tars_a2dp_data_callback(
@@ -302,53 +339,16 @@ static int32_t tars_a2dp_data_callback(
     }
 
     /*
-       Jika audio belum benar-benar aktif,
-       tetap berikan silence.
-
-       Jangan melakukan operasi Bluetooth
-       dari dalam callback.
-    */
-
-    if (
-        !tars_audio_started
-    ) {
-        memset(
-            data,
-            0,
-            (size_t)len
-        );
-
-        return len;
-    }
-
-    /*
        INTERNAL TONE
     */
 
     if (
         tars_internal_tone
     ) {
-        int32_t generated =
-            tars_generate_tone(
-                data,
-                len
-            );
-
-        /*
-           Pastikan sisa byte terisi silence.
-        */
-
-        if (
-            generated < len
-        ) {
-            memset(
-                data + generated,
-                0,
-                (size_t)(len - generated)
-            );
-        }
-
-        return len;
+        return tars_generate_tone(
+            data,
+            len
+        );
     }
 
     /*
@@ -362,12 +362,7 @@ static int32_t tars_a2dp_data_callback(
         );
 
     /*
-       Jika PCM kurang,
-       isi sisa dengan silence.
-
-       Jangan return jumlah PCM yang lebih kecil,
-       karena callback A2DP meminta buffer
-       dengan panjang tertentu.
+       Fill missing data with silence.
     */
 
     if (
@@ -379,6 +374,10 @@ static int32_t tars_a2dp_data_callback(
             (size_t)len - received
         );
     }
+
+    /*
+       Always return the requested length.
+    */
 
     return len;
 }
@@ -1593,16 +1592,11 @@ tars_a2dp_tone_stop(void)
     tars_tone_phase =
         0;
 
-    /*
-       Hentikan stream sepenuhnya agar callback
-       tidak terus menghasilkan audio kosong.
-    */
-
     if (
-        tars_audio_started &&
-        tars_a2dp_connected
+        tars_audio_started
     ) {
-        tars_request_audio_stop();
+        tars_status_text =
+            "A2DP AUDIO STREAMING";
     }
 
     return mp_obj_new_str(
@@ -2092,8 +2086,6 @@ tars_a2dp_user_cmodule =
 
 /* =========================================================
    REGISTER MODULE
-
-   HARUS SATU BARIS
    ========================================================= */
 
 MP_REGISTER_MODULE(MP_QSTR_tars_a2dp, tars_a2dp_user_cmodule);
