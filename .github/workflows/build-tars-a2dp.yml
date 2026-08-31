@@ -65,6 +65,43 @@ jobs:
             --recursive \
             --filter=tree:0
 
+      - name: Patch A2DP source queue for lower RAM use
+        shell: bash
+        run: |
+          A2DP_FILE="$GITHUB_WORKSPACE/esp-idf/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_a2dp_source.c"
+
+          echo "=================================================="
+          echo "A2DP SOURCE QUEUE PATCH"
+          echo "=================================================="
+
+          echo "BEFORE PATCH:"
+          grep -n \
+            -E "BTC_MEDIA_AA_BUF_SIZE|MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
+            "$A2DP_FILE"
+
+          sed -i \
+            's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
+            "$A2DP_FILE"
+
+          echo ""
+          echo "AFTER PATCH:"
+          grep -n \
+            -E "BTC_MEDIA_AA_BUF_SIZE|MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
+            "$A2DP_FILE"
+
+          echo ""
+          echo "VERIFY PATCH RESULT:"
+
+          if grep -q \
+            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
+            "$A2DP_FILE"; then
+
+            echo "PATCH SUCCESS"
+          else
+            echo "PATCH FAILED"
+            exit 1
+          fi
+
       - name: Install ESP-IDF
         run: |
           cd esp-idf
@@ -152,7 +189,6 @@ jobs:
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
-
           rm -rf ports/esp32/build-TARS_ESP32_A2DP
 
           make -C ports/esp32 \
@@ -357,24 +393,20 @@ jobs:
           echo "MODULEDEFS.COLLECTED TARS"
           echo "=================================================="
 
-          if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
-            grep -n \
-              -E "tars_a2dp|tars_bluetooth" \
-              "$BUILD/genhdr/moduledefs.collected" \
-              || true
-          fi
+          grep -n \
+            -E "tars_a2dp|tars_bluetooth" \
+            "$BUILD/genhdr/moduledefs.collected" \
+            || true
 
           echo ""
           echo "=================================================="
           echo "MODULEDEFS.H TARS"
           echo "=================================================="
 
-          if [ -f "$BUILD/genhdr/moduledefs.h" ]; then
-            grep -n \
-              -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
-              "$BUILD/genhdr/moduledefs.h" \
-              || true
-          fi
+          grep -n \
+            -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
+            "$BUILD/genhdr/moduledefs.h" \
+            || true
 
       - name: Prepare firmware
         if: success()
