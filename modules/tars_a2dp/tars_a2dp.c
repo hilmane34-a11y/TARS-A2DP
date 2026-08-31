@@ -366,17 +366,6 @@ static void tars_a2dp_event_callback(
                     break;
 
 
-                case ESP_A2D_AUDIO_STATE_REMOTE_SUSPEND:
-
-                    tars_audio_started =
-                        false;
-
-                    tars_status_text =
-                        "A2DP AUDIO SUSPENDED";
-
-                    break;
-
-
                 default:
 
                     break;
