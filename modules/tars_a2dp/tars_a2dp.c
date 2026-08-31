@@ -22,16 +22,12 @@
    PCM Streaming
    Internal Tone Test
 
-   BLUETOOTH:
-   - TARS V1 MAN dapat terlihat di HP
-   - Scan I7-TWS tetap digunakan
-   - Connect I7-TWS tetap digunakan
-
-   AUDIO:
-   - PCM buffer statis
-   - Tidak ada malloc di audio callback
-   - Tone dibuat langsung di callback
-   - PCM kosong diisi silence
+   AUDIO REVISION:
+   - Bluetooth scan/connect system unchanged
+   - Audio callback kept lightweight
+   - PCM buffer access simplified
+   - Silence returned when no PCM data
+   - Tone generation kept inside callback only
    ========================================================= */
 
 
@@ -39,16 +35,14 @@
    SETTINGS
    ========================================================= */
 
-#define TARS_DEVICE_NAME "TARS V1 MAN"
+#define TARS_DEVICE_NAME "TARS"
 #define TARS_TARGET_NAME "I7-TWS"
 
-#define PCM_BUFFER_SIZE 8192
+#define PCM_BUFFER_SIZE 2048
 
 #define TARS_SAMPLE_RATE 44100
 #define TARS_CHANNELS 2
 #define TARS_BITS_PER_SAMPLE 16
-
-#define TARS_FRAME_BYTES 4
 
 
 /* =========================================================
@@ -90,7 +84,7 @@ static volatile size_t pcm_used = 0;
    INTERNAL TONE
    ========================================================= */
 
-static volatile bool tars_internal_tone = false;
+static bool tars_internal_tone = false;
 
 static uint32_t tars_tone_phase = 0;
 static uint32_t tars_tone_frequency = 440;
@@ -117,24 +111,6 @@ static void tars_pcm_clear(void)
 
 
 /* =========================================================
-   PCM AVAILABLE SPACE
-   ========================================================= */
-
-static size_t tars_pcm_free(void)
-{
-    size_t used = pcm_used;
-
-    if (
-        used >= PCM_BUFFER_SIZE
-    ) {
-        return 0;
-    }
-
-    return PCM_BUFFER_SIZE - used;
-}
-
-
-/* =========================================================
    WRITE PCM BUFFER
    ========================================================= */
 
@@ -153,16 +129,9 @@ static size_t tars_pcm_write(
     }
 
     while (
-        written < len
+        written < len &&
+        pcm_used < PCM_BUFFER_SIZE
     ) {
-        size_t used = pcm_used;
-
-        if (
-            used >= PCM_BUFFER_SIZE
-        ) {
-            break;
-        }
-
         pcm_buffer[pcm_write_pos] =
             data[written];
 
@@ -201,16 +170,9 @@ static size_t tars_pcm_read(
     }
 
     while (
-        read_count < len
+        read_count < len &&
+        pcm_used > 0
     ) {
-        size_t used = pcm_used;
-
-        if (
-            used == 0
-        ) {
-            break;
-        }
-
         data[read_count] =
             pcm_buffer[pcm_read_pos];
 
@@ -252,7 +214,7 @@ static int32_t tars_generate_tone(
     }
 
     int32_t usable_len =
-        len - (len % TARS_FRAME_BYTES);
+        len - (len % 4);
 
     int32_t position = 0;
 
@@ -275,10 +237,10 @@ static int32_t tars_generate_tone(
             tars_tone_phase &
             0x80000000UL
         ) {
-            sample = 2500;
+            sample = 3000;
         }
         else {
-            sample = -2500;
+            sample = -3000;
         }
 
         data[position + 0] =
@@ -301,7 +263,7 @@ static int32_t tars_generate_tone(
                 (sample >> 8) & 0xFF
             );
 
-        position += TARS_FRAME_BYTES;
+        position += 4;
 
         tars_tone_phase +=
             phase_increment;
@@ -314,16 +276,17 @@ static int32_t tars_generate_tone(
 /* =========================================================
    A2DP AUDIO DATA CALLBACK
 
+   PENTING:
+   Callback ini hanya menyediakan PCM.
+
    Tidak melakukan:
-   - malloc
-   - free
    - connect
    - disconnect
    - scan
    - media control
-   - print
+   - Bluetooth API lain
 
-   Hanya menyediakan PCM.
+   Ini menjaga callback tetap ringan.
    ========================================================= */
 
 static int32_t tars_a2dp_data_callback(
@@ -339,8 +302,11 @@ static int32_t tars_a2dp_data_callback(
     }
 
     /*
-       Jika audio belum aktif,
-       seluruh buffer menjadi silence.
+       Jika audio belum benar-benar aktif,
+       tetap berikan silence.
+
+       Jangan melakukan operasi Bluetooth
+       dari dalam callback.
     */
 
     if (
@@ -368,6 +334,10 @@ static int32_t tars_a2dp_data_callback(
                 len
             );
 
+        /*
+           Pastikan sisa byte terisi silence.
+        */
+
         if (
             generated < len
         ) {
@@ -394,6 +364,10 @@ static int32_t tars_a2dp_data_callback(
     /*
        Jika PCM kurang,
        isi sisa dengan silence.
+
+       Jangan return jumlah PCM yang lebih kecil,
+       karena callback A2DP meminta buffer
+       dengan panjang tertentu.
     */
 
     if (
@@ -507,9 +481,6 @@ static esp_err_t tars_request_audio_stop(void)
     ) {
         tars_media_stop_pending =
             false;
-
-        tars_status_text =
-            "A2DP STOP REQUEST FAILED";
     }
 
     return ret;
@@ -567,9 +538,6 @@ static void tars_a2dp_event_callback(
                     tars_internal_tone =
                         false;
 
-                    tars_tone_phase =
-                        0;
-
                     tars_pcm_clear();
 
                     tars_status_text =
@@ -577,6 +545,7 @@ static void tars_a2dp_event_callback(
 
                     break;
                 }
+
 
                 case ESP_A2D_CONNECTION_STATE_CONNECTING:
                 {
@@ -594,6 +563,7 @@ static void tars_a2dp_event_callback(
 
                     break;
                 }
+
 
                 case ESP_A2D_CONNECTION_STATE_CONNECTED:
                 {
@@ -624,6 +594,7 @@ static void tars_a2dp_event_callback(
                     break;
                 }
 
+
                 case ESP_A2D_CONNECTION_STATE_DISCONNECTING:
                 {
                     tars_a2dp_connected =
@@ -640,6 +611,7 @@ static void tars_a2dp_event_callback(
 
                     break;
                 }
+
 
                 default:
                     break;
@@ -686,6 +658,7 @@ static void tars_a2dp_event_callback(
                     break;
                 }
 
+
                 case ESP_A2D_AUDIO_STATE_STOPPED:
                 {
                     tars_audio_started =
@@ -703,12 +676,6 @@ static void tars_a2dp_event_callback(
                     tars_media_stop_pending =
                         false;
 
-                    tars_internal_tone =
-                        false;
-
-                    tars_tone_phase =
-                        0;
-
                     if (
                         tars_a2dp_connected
                     ) {
@@ -723,6 +690,7 @@ static void tars_a2dp_event_callback(
                     break;
                 }
 
+
                 default:
                     break;
             }
@@ -733,10 +701,6 @@ static void tars_a2dp_event_callback(
 
         case ESP_A2D_MEDIA_CTRL_ACK_EVT:
         {
-            /*
-               CHECK SOURCE READY ACK
-            */
-
             if (
                 param->media_ctrl_stat.cmd ==
                 ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY
@@ -793,10 +757,6 @@ static void tars_a2dp_event_callback(
             }
 
 
-            /*
-               START ACK
-            */
-
             if (
                 param->media_ctrl_stat.cmd ==
                 ESP_A2D_MEDIA_CTRL_START
@@ -818,10 +778,6 @@ static void tars_a2dp_event_callback(
                 break;
             }
 
-
-            /*
-               STOP ACK
-            */
 
             if (
                 param->media_ctrl_stat.cmd ==
@@ -1094,15 +1050,10 @@ tars_a2dp_start(void)
         );
     }
 
-    /*
-       TARS V1 MAN harus dapat ditemukan
-       oleh HP dalam daftar Bluetooth.
-    */
-
     ret =
         esp_bt_gap_set_scan_mode(
             ESP_BT_CONNECTABLE,
-            ESP_BT_GENERAL_DISCOVERABLE
+            ESP_BT_NON_CONNECTABLE
         );
 
     if (
@@ -1167,9 +1118,6 @@ tars_a2dp_start(void)
     tars_internal_tone =
         false;
 
-    tars_tone_phase =
-        0;
-
     tars_scanning =
         false;
 
@@ -1196,12 +1144,6 @@ tars_a2dp_start(void)
 
     tars_media_stop_pending =
         false;
-
-    memset(
-        tars_target_bda,
-        0,
-        ESP_BD_ADDR_LEN
-    );
 
     tars_bt_started =
         true;
@@ -1651,15 +1593,16 @@ tars_a2dp_tone_stop(void)
     tars_tone_phase =
         0;
 
+    /*
+       Hentikan stream sepenuhnya agar callback
+       tidak terus menghasilkan audio kosong.
+    */
+
     if (
         tars_audio_started &&
         tars_a2dp_connected
     ) {
-        if (
-            !tars_media_stop_pending
-        ) {
-            tars_request_audio_stop();
-        }
+        tars_request_audio_stop();
     }
 
     return mp_obj_new_str(
@@ -1697,9 +1640,6 @@ tars_a2dp_stop(void)
     tars_internal_tone =
         false;
 
-    tars_tone_phase =
-        0;
-
     if (
         !tars_audio_started
     ) {
@@ -1707,17 +1647,6 @@ tars_a2dp_stop(void)
             "A2DP AUDIO ALREADY STOPPED",
             strlen(
                 "A2DP AUDIO ALREADY STOPPED"
-            )
-        );
-    }
-
-    if (
-        tars_media_stop_pending
-    ) {
-        return mp_obj_new_str(
-            "A2DP STOP ALREADY PENDING",
-            strlen(
-                "A2DP STOP ALREADY PENDING"
             )
         );
     }
@@ -1801,21 +1730,14 @@ static MP_DEFINE_CONST_FUN_OBJ_1(
 static mp_obj_t
 tars_a2dp_buffer(void)
 {
-    char result[96];
-
-    size_t used =
-        pcm_used;
-
-    size_t free_space =
-        tars_pcm_free();
+    char result[80];
 
     snprintf(
         result,
         sizeof(result),
-        "PCM BUFFER: %u / %u BYTES | FREE: %u",
-        (unsigned int)used,
-        (unsigned int)PCM_BUFFER_SIZE,
-        (unsigned int)free_space
+        "PCM BUFFER: %u / %u BYTES",
+        (unsigned int)pcm_used,
+        (unsigned int)PCM_BUFFER_SIZE
     );
 
     return mp_obj_new_str(
@@ -2170,6 +2092,7 @@ tars_a2dp_user_cmodule =
 
 /* =========================================================
    REGISTER MODULE
+
    HARUS SATU BARIS
    ========================================================= */
 
