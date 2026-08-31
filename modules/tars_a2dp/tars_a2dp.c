@@ -21,13 +21,6 @@
    Scan + Connect
    PCM Streaming
    Internal Tone Test
-
-   AUDIO REVISION:
-   - Bluetooth system preserved
-   - Media ACK sequence preserved
-   - Tone PCM is pre-generated
-   - Audio callback kept lightweight
-   - Continuous tone buffer looping
    ========================================================= */
 
 
@@ -38,36 +31,41 @@
 #define TARS_DEVICE_NAME "TARS"
 #define TARS_TARGET_NAME "I7-TWS"
 
-#define PCM_BUFFER_SIZE 8192
+#define PCM_BUFFER_SIZE 4096
 
 #define TARS_SAMPLE_RATE 44100
 #define TARS_CHANNELS 2
 #define TARS_BITS_PER_SAMPLE 16
-
-#define TARS_FRAME_BYTES 4
-
-#define TARS_TONE_FREQUENCY 440
-#define TARS_TONE_PERIOD_FRAMES 441
-
-#define TARS_TONE_BUFFER_SIZE \
-    (TARS_TONE_PERIOD_FRAMES * TARS_FRAME_BYTES)
 
 
 /* =========================================================
    BLUETOOTH STATE
    ========================================================= */
 
-static bool tars_bt_started = false;
-static bool tars_scanning = false;
-static bool tars_device_found = false;
-static bool tars_a2dp_connected = false;
-static bool tars_a2dp_connecting = false;
-static bool tars_audio_started = false;
+static volatile bool tars_bt_started = false;
+static volatile bool tars_scanning = false;
+static volatile bool tars_device_found = false;
 
-static bool tars_media_check_pending = false;
-static bool tars_media_start_requested = false;
-static bool tars_media_start_pending = false;
-static bool tars_media_stop_pending = false;
+static volatile bool tars_a2dp_connected = false;
+static volatile bool tars_a2dp_connecting = false;
+
+static volatile bool tars_audio_started = false;
+
+/*
+   This flag controls whether audio content is actually
+   generated for the active A2DP stream.
+*/
+static volatile bool tars_stream_enabled = false;
+
+
+/* =========================================================
+   MEDIA COMMAND STATE
+   ========================================================= */
+
+static volatile bool tars_media_check_pending = false;
+static volatile bool tars_media_start_requested = false;
+static volatile bool tars_media_start_pending = false;
+static volatile bool tars_media_stop_pending = false;
 
 
 /* =========================================================
@@ -90,25 +88,12 @@ static volatile size_t pcm_used = 0;
 
 /* =========================================================
    INTERNAL TONE
-
-   The tone is generated once when tone() is called.
-
-   The A2DP callback then only copies the already prepared
-   PCM data and loops it continuously.
-
-   This keeps the Bluetooth callback as light as possible.
    ========================================================= */
 
-static bool tars_internal_tone = false;
+static volatile bool tars_internal_tone = false;
 
-static uint8_t
-tars_tone_buffer[TARS_TONE_BUFFER_SIZE];
-
-static size_t
-tars_tone_read_pos = 0;
-
-static bool
-tars_tone_buffer_ready = false;
+static uint32_t tars_tone_phase = 0;
+static uint32_t tars_tone_frequency = 440;
 
 
 /* =========================================================
@@ -214,115 +199,10 @@ static size_t tars_pcm_read(
 
 
 /* =========================================================
-   PREPARE INTERNAL TONE
-
-   440 Hz square wave
-   441 samples = exactly 10 periods at 44100 Hz
-
-   Therefore:
-   44100 / 440 is approximately 100.227 samples.
-
-   We create a repeating 441-frame block with an integer
-   waveform pattern designed for stable continuous playback.
-
-   Stereo:
-   LEFT  = 16-bit little endian
-   RIGHT = 16-bit little endian
+   GENERATE INTERNAL TONE
    ========================================================= */
 
-static void tars_prepare_tone(void)
-{
-    size_t position = 0;
-
-    uint32_t phase = 0;
-
-    uint32_t phase_increment =
-        (uint32_t)(
-            (
-                (uint64_t)
-                TARS_TONE_FREQUENCY *
-                4294967296ULL
-            )
-            /
-            TARS_SAMPLE_RATE
-        );
-
-    while (
-        position <
-        TARS_TONE_BUFFER_SIZE
-    ) {
-        int16_t sample;
-
-        /*
-           Moderate amplitude.
-
-           This avoids unnecessarily loud clipping.
-        */
-
-        if (
-            phase &
-            0x80000000UL
-        ) {
-            sample = 2500;
-        }
-        else {
-            sample = -2500;
-        }
-
-        /*
-           LEFT
-        */
-
-        tars_tone_buffer[position + 0] =
-            (uint8_t)(
-                sample & 0xFF
-            );
-
-        tars_tone_buffer[position + 1] =
-            (uint8_t)(
-                (sample >> 8) & 0xFF
-            );
-
-        /*
-           RIGHT
-        */
-
-        tars_tone_buffer[position + 2] =
-            (uint8_t)(
-                sample & 0xFF
-            );
-
-        tars_tone_buffer[position + 3] =
-            (uint8_t)(
-                (sample >> 8) & 0xFF
-            );
-
-        phase +=
-            phase_increment;
-
-        position +=
-            TARS_FRAME_BYTES;
-    }
-
-    tars_tone_read_pos =
-        0;
-
-    tars_tone_buffer_ready =
-        true;
-}
-
-
-/* =========================================================
-   COPY INTERNAL TONE
-
-   IMPORTANT:
-
-   This function does not generate samples.
-
-   It only copies pre-generated PCM data and loops it.
-   ========================================================= */
-
-static int32_t tars_copy_tone(
+static int32_t tars_generate_tone(
     uint8_t *data,
     int32_t len
 )
@@ -334,71 +214,81 @@ static int32_t tars_copy_tone(
         return 0;
     }
 
-    if (
-        !tars_tone_buffer_ready
-    ) {
-        /*
-           Safety fallback.
+    /*
+       Always initialize the entire buffer.
+    */
 
-           Normally the buffer is prepared before streaming.
-        */
+    memset(
+        data,
+        0,
+        (size_t)len
+    );
 
-        memset(
-            data,
-            0,
-            (size_t)len
+    /*
+       Stereo:
+       16-bit left + 16-bit right
+       = 4 bytes per frame.
+    */
+
+    int32_t usable_len =
+        len - (len % 4);
+
+    int32_t position = 0;
+
+    uint32_t phase_increment =
+        (uint32_t)(
+            (
+                (uint64_t)
+                tars_tone_frequency *
+                4294967296ULL
+            )
+            /
+            TARS_SAMPLE_RATE
         );
-
-        return len;
-    }
-
-    size_t remaining =
-        (size_t)len;
-
-    size_t output_pos =
-        0;
 
     while (
-        remaining > 0
+        position < usable_len
     ) {
-        size_t available =
-            TARS_TONE_BUFFER_SIZE -
-            tars_tone_read_pos;
+        int16_t sample;
 
-        size_t copy_len =
-            remaining;
-
-        if (
-            copy_len >
-            available
-        ) {
-            copy_len =
-                available;
-        }
-
-        memcpy(
-            data + output_pos,
-            tars_tone_buffer +
-            tars_tone_read_pos,
-            copy_len
-        );
-
-        output_pos +=
-            copy_len;
-
-        remaining -=
-            copy_len;
-
-        tars_tone_read_pos +=
-            copy_len;
+        /*
+           Moderate amplitude.
+        */
 
         if (
-            tars_tone_read_pos >=
-            TARS_TONE_BUFFER_SIZE
+            tars_tone_phase &
+            0x80000000UL
         ) {
-            tars_tone_read_pos =
-                0;
+            sample = 2500;
         }
+        else {
+            sample = -2500;
+        }
+
+        data[position + 0] =
+            (uint8_t)(
+                sample & 0xFF
+            );
+
+        data[position + 1] =
+            (uint8_t)(
+                (sample >> 8) & 0xFF
+            );
+
+        data[position + 2] =
+            (uint8_t)(
+                sample & 0xFF
+            );
+
+        data[position + 3] =
+            (uint8_t)(
+                (sample >> 8) & 0xFF
+            );
+
+        tars_tone_phase +=
+            phase_increment;
+
+        position += 4;
     }
 
     return len;
@@ -410,14 +300,12 @@ static int32_t tars_copy_tone(
 
    IMPORTANT:
 
-   This callback runs in the Bluetooth audio path.
+   The Bluetooth stack calls this callback when it needs PCM.
 
-   Keep it lightweight:
-   - no printing
-   - no Python calls
-   - no allocation
-   - no Bluetooth control calls
-   - tone uses memcpy only
+   We do not start/stop Bluetooth or send media commands
+   inside this callback.
+
+   The callback only supplies data.
    ========================================================= */
 
 static int32_t tars_a2dp_data_callback(
@@ -433,13 +321,36 @@ static int32_t tars_a2dp_data_callback(
     }
 
     /*
+       Always initialize output first.
+    */
+
+    memset(
+        data,
+        0,
+        (size_t)len
+    );
+
+    /*
+       If stream content is disabled,
+       return silence.
+
+       No Bluetooth control function is called here.
+    */
+
+    if (
+        !tars_stream_enabled
+    ) {
+        return len;
+    }
+
+    /*
        INTERNAL TONE
     */
 
     if (
         tars_internal_tone
     ) {
-        return tars_copy_tone(
+        return tars_generate_tone(
             data,
             len
         );
@@ -456,26 +367,11 @@ static int32_t tars_a2dp_data_callback(
         );
 
     /*
-       If PCM data is insufficient,
-       complete the requested buffer
-       with silence.
+       Missing bytes remain silence because
+       the buffer was already cleared.
     */
 
-    if (
-        received <
-        (size_t)len
-    ) {
-        memset(
-            data + received,
-            0,
-            (size_t)len -
-            received
-        );
-    }
-
-    /*
-       Always return requested length.
-    */
+    (void)received;
 
     return len;
 }
@@ -494,9 +390,21 @@ static esp_err_t tars_request_audio_start(void)
         return ESP_FAIL;
     }
 
+    /*
+       Do not overlap START with STOP.
+    */
+
+    if (
+        tars_media_stop_pending
+    ) {
+        return ESP_FAIL;
+    }
+
     if (
         tars_audio_started
     ) {
+        tars_stream_enabled = true;
+
         return ESP_OK;
     }
 
@@ -512,6 +420,9 @@ static esp_err_t tars_request_audio_start(void)
 
     tars_media_check_pending =
         true;
+
+    tars_stream_enabled =
+        false;
 
     tars_status_text =
         "A2DP CHECKING SOURCE READY";
@@ -530,6 +441,9 @@ static esp_err_t tars_request_audio_start(void)
         tars_media_start_requested =
             false;
 
+        tars_stream_enabled =
+            false;
+
         tars_status_text =
             "A2DP SOURCE CHECK FAILED";
     }
@@ -544,6 +458,19 @@ static esp_err_t tars_request_audio_start(void)
 
 static esp_err_t tars_request_audio_stop(void)
 {
+    /*
+       Immediately disable audio generation.
+
+       This prevents tone/PCM generation while
+       the STOP command is being processed.
+    */
+
+    tars_stream_enabled =
+        false;
+
+    tars_internal_tone =
+        false;
+
     if (
         !tars_a2dp_connected
     ) {
@@ -562,6 +489,19 @@ static esp_err_t tars_request_audio_stop(void)
         return ESP_OK;
     }
 
+    /*
+       Cancel pending start intent.
+    */
+
+    tars_media_start_requested =
+        false;
+
+    tars_media_check_pending =
+        false;
+
+    tars_media_start_pending =
+        false;
+
     tars_media_stop_pending =
         true;
 
@@ -578,9 +518,46 @@ static esp_err_t tars_request_audio_stop(void)
     ) {
         tars_media_stop_pending =
             false;
+
+        tars_status_text =
+            "A2DP STOP REQUEST FAILED";
     }
 
     return ret;
+}
+
+
+/* =========================================================
+   RESET STREAM STATE
+   ========================================================= */
+
+static void tars_reset_stream_state(void)
+{
+    tars_audio_started =
+        false;
+
+    tars_stream_enabled =
+        false;
+
+    tars_internal_tone =
+        false;
+
+    tars_media_check_pending =
+        false;
+
+    tars_media_start_requested =
+        false;
+
+    tars_media_start_pending =
+        false;
+
+    tars_media_stop_pending =
+        false;
+
+    tars_tone_phase =
+        0;
+
+    tars_pcm_clear();
 }
 
 
@@ -617,28 +594,7 @@ static void tars_a2dp_event_callback(
                     tars_a2dp_connecting =
                         false;
 
-                    tars_audio_started =
-                        false;
-
-                    tars_media_check_pending =
-                        false;
-
-                    tars_media_start_requested =
-                        false;
-
-                    tars_media_start_pending =
-                        false;
-
-                    tars_media_stop_pending =
-                        false;
-
-                    tars_internal_tone =
-                        false;
-
-                    tars_tone_read_pos =
-                        0;
-
-                    tars_pcm_clear();
+                    tars_reset_stream_state();
 
                     tars_status_text =
                         "A2DP DISCONNECTED";
@@ -654,6 +610,9 @@ static void tars_a2dp_event_callback(
 
                     tars_a2dp_connecting =
                         true;
+
+                    tars_stream_enabled =
+                        false;
 
                     tars_audio_started =
                         false;
@@ -674,6 +633,9 @@ static void tars_a2dp_event_callback(
                         false;
 
                     tars_audio_started =
+                        false;
+
+                    tars_stream_enabled =
                         false;
 
                     tars_media_check_pending =
@@ -697,13 +659,10 @@ static void tars_a2dp_event_callback(
 
                 case ESP_A2D_CONNECTION_STATE_DISCONNECTING:
                 {
-                    tars_a2dp_connected =
+                    tars_stream_enabled =
                         false;
 
-                    tars_a2dp_connecting =
-                        false;
-
-                    tars_audio_started =
+                    tars_internal_tone =
                         false;
 
                     tars_status_text =
@@ -744,6 +703,14 @@ static void tars_a2dp_event_callback(
                     tars_media_stop_pending =
                         false;
 
+                    /*
+                       Enable actual audio only after
+                       STARTED event is received.
+                    */
+
+                    tars_stream_enabled =
+                        true;
+
                     if (
                         tars_internal_tone
                     ) {
@@ -762,6 +729,12 @@ static void tars_a2dp_event_callback(
                 case ESP_A2D_AUDIO_STATE_STOPPED:
                 {
                     tars_audio_started =
+                        false;
+
+                    tars_stream_enabled =
+                        false;
+
+                    tars_internal_tone =
                         false;
 
                     tars_media_start_pending =
@@ -815,7 +788,8 @@ static void tars_a2dp_event_callback(
                     if (
                         tars_media_start_requested &&
                         !tars_audio_started &&
-                        tars_a2dp_connected
+                        tars_a2dp_connected &&
+                        !tars_media_stop_pending
                     ) {
                         tars_media_start_pending =
                             true;
@@ -837,6 +811,9 @@ static void tars_a2dp_event_callback(
                             tars_media_start_requested =
                                 false;
 
+                            tars_stream_enabled =
+                                false;
+
                             tars_status_text =
                                 "A2DP START FAILED";
                         }
@@ -847,6 +824,9 @@ static void tars_a2dp_event_callback(
                         false;
 
                     tars_media_start_pending =
+                        false;
+
+                    tars_stream_enabled =
                         false;
 
                     tars_status_text =
@@ -871,6 +851,9 @@ static void tars_a2dp_event_callback(
                     tars_media_start_requested =
                         false;
 
+                    tars_stream_enabled =
+                        false;
+
                     tars_status_text =
                         "A2DP START ACK FAILED";
                 }
@@ -884,6 +867,12 @@ static void tars_a2dp_event_callback(
                 ESP_A2D_MEDIA_CTRL_STOP
             ) {
                 tars_media_stop_pending =
+                    false;
+
+                tars_stream_enabled =
+                    false;
+
+                tars_internal_tone =
                     false;
 
                 if (
@@ -943,8 +932,7 @@ static void tars_gap_callback(
 
             for (
                 int i = 0;
-                i <
-                param->disc_res.num_prop;
+                i < param->disc_res.num_prop;
                 i++
             ) {
                 esp_bt_gap_dev_prop_t *prop =
@@ -955,8 +943,7 @@ static void tars_gap_callback(
                     ESP_BT_GAP_DEV_PROP_EIR
                 ) {
                     eir =
-                        (uint8_t *)
-                        prop->val;
+                        (uint8_t *)prop->val;
                 }
             }
 
@@ -1220,10 +1207,7 @@ tars_a2dp_start(void)
     tars_internal_tone =
         false;
 
-    tars_tone_read_pos =
-        0;
-
-    tars_tone_buffer_ready =
+    tars_stream_enabled =
         false;
 
     tars_scanning =
@@ -1541,8 +1525,22 @@ tars_a2dp_play(void)
     }
 
     if (
+        tars_media_stop_pending
+    ) {
+        return mp_obj_new_str(
+            "A2DP STOP STILL PENDING",
+            strlen(
+                "A2DP STOP STILL PENDING"
+            )
+        );
+    }
+
+    if (
         tars_audio_started
     ) {
+        tars_stream_enabled =
+            true;
+
         return mp_obj_new_str(
             "A2DP AUDIO ALREADY STREAMING",
             strlen(
@@ -1622,20 +1620,32 @@ tars_a2dp_tone(void)
         );
     }
 
-    /*
-       Prepare tone BEFORE streaming.
-
-       The audio callback will only copy this data.
-    */
-
-    tars_prepare_tone();
+    if (
+        tars_media_stop_pending
+    ) {
+        return mp_obj_new_str(
+            "A2DP STOP STILL PENDING",
+            strlen(
+                "A2DP STOP STILL PENDING"
+            )
+        );
+    }
 
     tars_internal_tone =
         true;
 
+    tars_tone_phase =
+        0;
+
+    tars_tone_frequency =
+        440;
+
     if (
         tars_audio_started
     ) {
+        tars_stream_enabled =
+            true;
+
         tars_status_text =
             "A2DP INTERNAL TONE STREAMING";
 
@@ -1668,6 +1678,9 @@ tars_a2dp_tone(void)
         tars_internal_tone =
             false;
 
+        tars_stream_enabled =
+            false;
+
         return mp_obj_new_str(
             "ERROR: TONE SOURCE NOT READY",
             strlen(
@@ -1692,6 +1705,11 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 /* =========================================================
    STOP INTERNAL TONE
+
+   Revised:
+
+   This now stops the actual A2DP media stream
+   when tone is active.
    ========================================================= */
 
 static mp_obj_t
@@ -1700,20 +1718,55 @@ tars_a2dp_tone_stop(void)
     tars_internal_tone =
         false;
 
-    tars_tone_read_pos =
+    tars_tone_phase =
         0;
 
+    tars_stream_enabled =
+        false;
+
     if (
-        tars_audio_started
+        !tars_a2dp_connected
+    ) {
+        return mp_obj_new_str(
+            "TARS INTERNAL TONE STOPPED - A2DP DISCONNECTED",
+            strlen(
+                "TARS INTERNAL TONE STOPPED - A2DP DISCONNECTED"
+            )
+        );
+    }
+
+    if (
+        !tars_audio_started
     ) {
         tars_status_text =
-            "A2DP AUDIO STREAMING";
+            "A2DP CONNECTED";
+
+        return mp_obj_new_str(
+            "TARS INTERNAL TONE STOPPED",
+            strlen(
+                "TARS INTERNAL TONE STOPPED"
+            )
+        );
+    }
+
+    esp_err_t ret =
+        tars_request_audio_stop();
+
+    if (
+        ret != ESP_OK
+    ) {
+        return mp_obj_new_str(
+            "TONE OFF - A2DP STOP REQUEST FAILED",
+            strlen(
+                "TONE OFF - A2DP STOP REQUEST FAILED"
+            )
+        );
     }
 
     return mp_obj_new_str(
-        "TARS INTERNAL TONE STOPPED",
+        "TARS TONE STOPPED - A2DP STOP REQUESTED",
         strlen(
-            "TARS INTERNAL TONE STOPPED"
+            "TARS TONE STOPPED - A2DP STOP REQUESTED"
         )
     );
 }
@@ -1731,26 +1784,36 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 static mp_obj_t
 tars_a2dp_stop(void)
 {
-    if (
-        !tars_a2dp_connected
-    ) {
-        return mp_obj_new_str(
-            "ERROR: A2DP NOT CONNECTED",
-            strlen(
-                "ERROR: A2DP NOT CONNECTED"
-            )
-        );
-    }
+    /*
+       Always disable local generation first.
+    */
 
     tars_internal_tone =
         false;
 
-    tars_tone_read_pos =
+    tars_stream_enabled =
+        false;
+
+    tars_tone_phase =
         0;
+
+    if (
+        !tars_a2dp_connected
+    ) {
+        return mp_obj_new_str(
+            "A2DP ALREADY DISCONNECTED",
+            strlen(
+                "A2DP ALREADY DISCONNECTED"
+            )
+        );
+    }
 
     if (
         !tars_audio_started
     ) {
+        tars_status_text =
+            "A2DP CONNECTED";
+
         return mp_obj_new_str(
             "A2DP AUDIO ALREADY STOPPED",
             strlen(
@@ -1807,9 +1870,7 @@ tars_a2dp_write(
     if (
         !tars_a2dp_connected
     ) {
-        return mp_obj_new_int(
-            0
-        );
+        return mp_obj_new_int(0);
     }
 
     tars_internal_tone =
@@ -1846,17 +1907,13 @@ tars_a2dp_buffer(void)
         result,
         sizeof(result),
         "PCM BUFFER: %u / %u BYTES",
-        (unsigned int)
-        pcm_used,
-        (unsigned int)
-        PCM_BUFFER_SIZE
+        (unsigned int)pcm_used,
+        (unsigned int)PCM_BUFFER_SIZE
     );
 
     return mp_obj_new_str(
         result,
-        strlen(
-            result
-        )
+        strlen(result)
     );
 }
 
@@ -1930,7 +1987,8 @@ tars_a2dp_test(void)
 
     if (
         tars_internal_tone &&
-        tars_audio_started
+        tars_audio_started &&
+        tars_stream_enabled
     ) {
         return mp_obj_new_str(
             "TARS INTERNAL TONE STREAMING",
@@ -2206,6 +2264,7 @@ tars_a2dp_user_cmodule =
 
 /* =========================================================
    REGISTER MODULE
+   IMPORTANT: ONE LINE
    ========================================================= */
 
 MP_REGISTER_MODULE(MP_QSTR_tars_a2dp, tars_a2dp_user_cmodule);
