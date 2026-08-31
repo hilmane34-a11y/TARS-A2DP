@@ -11,34 +11,28 @@
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
 #include "esp_a2dp_api.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/portmacro.h"
 
 
 /* =========================================================
-   TARS A2DP SOURCE
+   TARS A2DP SOURCE - REVISED
 
    ESP32
    Bluetooth Classic
    A2DP Source
+   Scan + Connect
+   PCM Streaming
+   Internal Tone Test
 
-   Features:
-   - Scan Bluetooth device
-   - Find I7-TWS
-   - Connect
-   - Internal 440 Hz tone
-   - PCM streaming from MicroPython
-   - Ring buffer
-   - Start / Stop audio
+   IMPORTANT:
+   MEDIA CONTROL menggunakan ACK EVENT.
 
-   Audio format:
-
-   44100 Hz
-   Stereo
-   Signed 16-bit
-   Little Endian
-
-   1 frame = 4 bytes
+   CHECK_SRC_RDY
+       ->
+   WAIT ACK
+       ->
+   START
+       ->
+   AUDIO STARTED
    ========================================================= */
 
 
@@ -51,23 +45,27 @@
 
 
 /*
-   PCM buffer.
-
-   Dibuat lebih kecil dari versi sebelumnya.
-
-   Static buffer tidak memakai heap biasa,
-   tetapi buffer lebih kecil tetap membantu
-   penggunaan RAM keseluruhan firmware.
+   Dikurangi dari 16384 menjadi 8192
+   untuk menghemat RAM.
 */
 
 #define PCM_BUFFER_SIZE 8192
 
 
-#define TARS_SAMPLE_RATE     44100
-#define TARS_CHANNELS        2
-#define TARS_BITS_PER_SAMPLE 16
+/*
+   Audio format:
 
-#define TARS_FRAME_BYTES     4
+   44100 Hz
+   Stereo
+   Signed 16-bit
+   Little Endian
+
+   1 frame = 4 bytes
+*/
+
+#define TARS_SAMPLE_RATE 44100
+#define TARS_CHANNELS 2
+#define TARS_BITS_PER_SAMPLE 16
 
 
 /* =========================================================
@@ -87,6 +85,26 @@ static bool tars_a2dp_connecting = false;
 static bool tars_audio_started = false;
 
 
+/*
+   MEDIA CONTROL STATE
+
+   Penting untuk mencegah:
+
+   CHECK_SRC_RDY
+   dan START
+
+   dikirim berulang-ulang.
+*/
+
+static bool tars_media_check_pending = false;
+
+static bool tars_media_start_requested = false;
+
+static bool tars_media_start_pending = false;
+
+static bool tars_media_stop_pending = false;
+
+
 /* =========================================================
    TARGET BLUETOOTH ADDRESS
    ========================================================= */
@@ -98,15 +116,7 @@ static esp_bd_addr_t tars_target_bda = {0};
    PCM RING BUFFER
    ========================================================= */
 
-
-/*
-   Buffer static.
-
-   Tidak menggunakan malloc().
-*/
-
 static uint8_t pcm_buffer[PCM_BUFFER_SIZE];
-
 
 static volatile size_t pcm_read_pos = 0;
 
@@ -115,59 +125,21 @@ static volatile size_t pcm_write_pos = 0;
 static volatile size_t pcm_used = 0;
 
 
-/*
-   Lock.
-
-   PCM buffer dapat diakses oleh:
-
-   1. MicroPython task
-   2. Bluetooth A2DP callback
-
-   Jadi akses posisi buffer harus dilindungi.
-*/
-
-static portMUX_TYPE tars_pcm_mux =
-    portMUX_INITIALIZER_UNLOCKED;
-
-
 /* =========================================================
    INTERNAL TONE
    ========================================================= */
 
 static bool tars_internal_tone = false;
 
-
-/*
-   32-bit phase oscillator.
-*/
-
 static uint32_t tars_tone_phase = 0;
 
-
-/*
-   Default 440 Hz.
-*/
-
 static uint32_t tars_tone_frequency = 440;
-
-
-/*
-   Jika 0:
-   tone berjalan terus.
-*/
-
-static uint32_t tars_tone_samples_remaining = 0;
-
-
-/*
-   Counter sample.
-*/
 
 static uint32_t tars_tone_sample_counter = 0;
 
 
 /* =========================================================
-   STATUS TEXT
+   STATUS
    ========================================================= */
 
 static const char *tars_status_text =
@@ -175,47 +147,16 @@ static const char *tars_status_text =
 
 
 /* =========================================================
-   HELPER
-   ========================================================= */
-
-static mp_obj_t
-tars_make_string(
-    const char *text
-) {
-
-    return mp_obj_new_str(
-        text,
-        strlen(text)
-    );
-
-}
-
-
-/* =========================================================
    CLEAR PCM BUFFER
    ========================================================= */
 
-static void
-tars_pcm_clear_internal(
-    void
-) {
-
-    portENTER_CRITICAL(
-        &tars_pcm_mux
-    );
-
-
+static void tars_pcm_clear(void)
+{
     pcm_read_pos = 0;
 
     pcm_write_pos = 0;
 
     pcm_used = 0;
-
-
-    portEXIT_CRITICAL(
-        &tars_pcm_mux
-    );
-
 }
 
 
@@ -223,12 +164,11 @@ tars_pcm_clear_internal(
    WRITE PCM BUFFER
    ========================================================= */
 
-static size_t
-tars_pcm_write(
+static size_t tars_pcm_write(
     const uint8_t *data,
     size_t len
-) {
-
+)
+{
     size_t written = 0;
 
 
@@ -236,104 +176,36 @@ tars_pcm_write(
         data == NULL ||
         len == 0
     ) {
-
         return 0;
-
     }
-
-
-    /*
-       PCM stereo 16-bit harus
-       kelipatan 4 byte.
-    */
-
-    len -=
-        (
-            len %
-            TARS_FRAME_BYTES
-        );
 
 
     while (
-        written < len
+        written < len &&
+        pcm_used < PCM_BUFFER_SIZE
     ) {
 
-        bool full = false;
+        pcm_buffer[pcm_write_pos] =
+            data[written];
 
 
-        portENTER_CRITICAL(
-            &tars_pcm_mux
-        );
-
-
-        if (
-            pcm_used >=
-            PCM_BUFFER_SIZE
-        ) {
-
-            full = true;
-
-        }
-        else {
-
-            pcm_buffer[
-                pcm_write_pos
-            ] =
-                data[
-                    written
-                ];
-
-
-            pcm_write_pos++;
-
-
-            if (
-                pcm_write_pos >=
-                PCM_BUFFER_SIZE
-            ) {
-
-                pcm_write_pos = 0;
-
-            }
-
-
-            pcm_used++;
-
-        }
-
-
-        portEXIT_CRITICAL(
-            &tars_pcm_mux
-        );
+        pcm_write_pos++;
 
 
         if (
-            full
+            pcm_write_pos >= PCM_BUFFER_SIZE
         ) {
-
-            break;
-
+            pcm_write_pos = 0;
         }
 
+
+        pcm_used++;
 
         written++;
-
     }
 
 
-    /*
-       Pastikan hasil kelipatan frame.
-    */
-
-    written -=
-        (
-            written %
-            TARS_FRAME_BYTES
-        );
-
-
     return written;
-
 }
 
 
@@ -341,12 +213,11 @@ tars_pcm_write(
    READ PCM BUFFER
    ========================================================= */
 
-static size_t
-tars_pcm_read(
+static size_t tars_pcm_read(
     uint8_t *data,
     size_t len
-) {
-
+)
+{
     size_t read = 0;
 
 
@@ -354,200 +225,84 @@ tars_pcm_read(
         data == NULL ||
         len == 0
     ) {
-
         return 0;
-
     }
 
 
     while (
-        read < len
+        read < len &&
+        pcm_used > 0
     ) {
 
-        bool empty = false;
+        data[read] =
+            pcm_buffer[pcm_read_pos];
 
 
-        portENTER_CRITICAL(
-            &tars_pcm_mux
-        );
-
-
-        if (
-            pcm_used == 0
-        ) {
-
-            empty = true;
-
-        }
-        else {
-
-            data[
-                read
-            ] =
-                pcm_buffer[
-                    pcm_read_pos
-                ];
-
-
-            pcm_read_pos++;
-
-
-            if (
-                pcm_read_pos >=
-                PCM_BUFFER_SIZE
-            ) {
-
-                pcm_read_pos = 0;
-
-            }
-
-
-            pcm_used--;
-
-        }
-
-
-        portEXIT_CRITICAL(
-            &tars_pcm_mux
-        );
+        pcm_read_pos++;
 
 
         if (
-            empty
+            pcm_read_pos >= PCM_BUFFER_SIZE
         ) {
-
-            break;
-
+            pcm_read_pos = 0;
         }
 
+
+        pcm_used--;
 
         read++;
-
     }
 
 
     return read;
-
-}
-
-
-/* =========================================================
-   PCM BUFFER USED
-   ========================================================= */
-
-static size_t
-tars_pcm_get_used(
-    void
-) {
-
-    size_t used;
-
-
-    portENTER_CRITICAL(
-        &tars_pcm_mux
-    );
-
-
-    used =
-        pcm_used;
-
-
-    portEXIT_CRITICAL(
-        &tars_pcm_mux
-    );
-
-
-    return used;
-
 }
 
 
 /* =========================================================
    GENERATE INTERNAL TONE
+
+   Square wave
+   16-bit signed
+   Stereo
+   Little Endian
    ========================================================= */
 
-static int32_t
-tars_generate_tone(
+static int32_t tars_generate_tone(
     uint8_t *data,
     int32_t len
-) {
-
+)
+{
     if (
         data == NULL ||
         len <= 0
     ) {
-
         return 0;
-
     }
 
 
     int32_t usable_len =
-        len -
-        (
-            len %
-            TARS_FRAME_BYTES
-        );
+        len - (len % 4);
+
+
+    int32_t position = 0;
 
 
     uint32_t phase_increment =
         (
             (
                 uint64_t
+                tars_tone_frequency
+                *
+                4294967296ULL
             )
-            tars_tone_frequency
-            *
-            4294967296ULL
-        )
-        /
-        TARS_SAMPLE_RATE;
-
-
-    int32_t position = 0;
+            /
+            TARS_SAMPLE_RATE
+        );
 
 
     while (
-        position <
-        usable_len
+        position < usable_len
     ) {
-
-        /*
-           Jika tone memiliki batas sample
-           dan sudah selesai,
-           kirim silence.
-        */
-
-        if (
-            tars_tone_samples_remaining > 0 &&
-            tars_tone_sample_counter >=
-            tars_tone_samples_remaining
-        ) {
-
-            data[
-                position + 0
-            ] = 0;
-
-            data[
-                position + 1
-            ] = 0;
-
-            data[
-                position + 2
-            ] = 0;
-
-            data[
-                position + 3
-            ] = 0;
-
-
-            position +=
-                TARS_FRAME_BYTES;
-
-
-            continue;
-
-        }
-
 
         int16_t sample;
 
@@ -557,80 +312,49 @@ tars_generate_tone(
             0x80000000UL
         ) {
 
-            sample = 10000;
+            sample = 7000;
 
         }
         else {
 
-            sample = -10000;
+            sample = -7000;
 
         }
 
 
         /*
-           Left channel.
+           LEFT
         */
 
-        data[
-            position + 0
-        ] =
-            (
-                uint8_t
-            )
-            (
-                sample &
-                0xFF
+        data[position + 0] =
+            (uint8_t)(
+                sample & 0xFF
             );
 
 
-        data[
-            position + 1
-        ] =
-            (
-                uint8_t
-            )
-            (
-                (
-                    sample >> 8
-                )
-                &
-                0xFF
+        data[position + 1] =
+            (uint8_t)(
+                (sample >> 8) & 0xFF
             );
 
 
         /*
-           Right channel.
+           RIGHT
         */
 
-        data[
-            position + 2
-        ] =
-            (
-                uint8_t
-            )
-            (
-                sample &
-                0xFF
+        data[position + 2] =
+            (uint8_t)(
+                sample & 0xFF
             );
 
 
-        data[
-            position + 3
-        ] =
-            (
-                uint8_t
-            )
-            (
-                (
-                    sample >> 8
-                )
-                &
-                0xFF
+        data[position + 3] =
+            (uint8_t)(
+                (sample >> 8) & 0xFF
             );
 
 
-        position +=
-            TARS_FRAME_BYTES;
+        position += 4;
 
 
         tars_tone_phase +=
@@ -638,102 +362,229 @@ tars_generate_tone(
 
 
         tars_tone_sample_counter++;
-
     }
 
 
     return usable_len;
-
 }
 
 
 /* =========================================================
    A2DP AUDIO DATA CALLBACK
+
+   CALLBACK INI HARUS RINGAN.
+
+   JANGAN:
+   - malloc
+   - printf
+   - Python object
+   - delay
    ========================================================= */
 
-static int32_t
-tars_a2dp_data_callback(
+static int32_t tars_a2dp_data_callback(
     uint8_t *data,
     int32_t len
-) {
-
+)
+{
     if (
         data == NULL ||
         len <= 0
     ) {
-
         return 0;
-
     }
 
 
-    /*
-       Internal tone mode.
-    */
+    /* ================================================
+       INTERNAL TONE
+       ================================================ */
 
     if (
         tars_internal_tone
     ) {
 
-        return
-            tars_generate_tone(
-                data,
-                len
-            );
+        return tars_generate_tone(
+            data,
+            len
+        );
 
     }
 
 
-    /*
-       PCM mode.
-    */
+    /* ================================================
+       PCM BUFFER
+       ================================================ */
 
     size_t received =
         tars_pcm_read(
             data,
-            (
-                size_t
-            )
-            len
+            (size_t)len
         );
 
 
     /*
-       Jika PCM habis,
-       isi sisa dengan silence.
-
-       Jangan mengembalikan buffer
-       setengah kosong.
+       Jika audio kurang,
+       isi sisanya dengan silence.
     */
 
     if (
-        received <
-        (
-            size_t
-        )
-        len
+        received < (size_t)len
     ) {
 
         memset(
             data + received,
             0,
-            (
-                size_t
-            )
-            len -
-            received
+            (size_t)len - received
         );
 
     }
 
 
+    return len;
+}
+
+
+/* =========================================================
+   REQUEST AUDIO START
+
+   JANGAN LANGSUNG START.
+
+   Urutan:
+
+   CHECK_SRC_RDY
+       ->
+   ACK SUCCESS
+       ->
+   START
+   ========================================================= */
+
+static esp_err_t tars_request_audio_start(void)
+{
+    if (
+        !tars_bt_started
+    ) {
+        return ESP_FAIL;
+    }
+
+
+    if (
+        !tars_a2dp_connected
+    ) {
+        return ESP_FAIL;
+    }
+
+
+    if (
+        tars_audio_started
+    ) {
+        return ESP_OK;
+    }
+
+
     /*
-       A2DP membutuhkan panjang buffer
-       penuh.
+       Jangan kirim ulang
+       jika proses sedang berjalan.
     */
 
-    return len;
+    if (
+        tars_media_check_pending ||
+        tars_media_start_pending
+    ) {
+        return ESP_OK;
+    }
 
+
+    tars_media_start_requested =
+        true;
+
+
+    tars_media_check_pending =
+        true;
+
+
+    tars_status_text =
+        "A2DP CHECKING SOURCE READY";
+
+
+    esp_err_t ret =
+        esp_a2d_media_ctrl(
+            ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY
+        );
+
+
+    if (
+        ret != ESP_OK
+    ) {
+
+        tars_media_check_pending =
+            false;
+
+
+        tars_media_start_requested =
+            false;
+
+
+        tars_status_text =
+            "A2DP SOURCE CHECK FAILED";
+
+    }
+
+
+    return ret;
+}
+
+
+/* =========================================================
+   REQUEST AUDIO STOP
+   ========================================================= */
+
+static esp_err_t tars_request_audio_stop(void)
+{
+    if (
+        !tars_a2dp_connected
+    ) {
+        return ESP_FAIL;
+    }
+
+
+    if (
+        !tars_audio_started
+    ) {
+        return ESP_OK;
+    }
+
+
+    if (
+        tars_media_stop_pending
+    ) {
+        return ESP_OK;
+    }
+
+
+    tars_media_stop_pending =
+        true;
+
+
+    tars_status_text =
+        "A2DP AUDIO STOPPING";
+
+
+    esp_err_t ret =
+        esp_a2d_media_ctrl(
+            ESP_A2D_MEDIA_CTRL_STOP
+        );
+
+
+    if (
+        ret != ESP_OK
+    ) {
+
+        tars_media_stop_pending =
+            false;
+
+    }
+
+
+    return ret;
 }
 
 
@@ -741,18 +592,15 @@ tars_a2dp_data_callback(
    A2DP EVENT CALLBACK
    ========================================================= */
 
-static void
-tars_a2dp_event_callback(
+static void tars_a2dp_event_callback(
     esp_a2d_cb_event_t event,
     esp_a2d_cb_param_t *param
-) {
-
+)
+{
     if (
         param == NULL
     ) {
-
         return;
-
     }
 
 
@@ -761,132 +609,128 @@ tars_a2dp_event_callback(
     ) {
 
 
-        /* =============================================
+        /* =================================================
            CONNECTION STATE
-           ============================================= */
+           ================================================= */
 
-        case
-        ESP_A2D_CONNECTION_STATE_EVT:
-
+        case ESP_A2D_CONNECTION_STATE_EVT:
+        {
 
             switch (
-                param
-                ->
-                conn_stat
-                .
-                state
+                param->conn_stat.state
             ) {
 
 
-                case
-                ESP_A2D_CONNECTION_STATE_DISCONNECTED:
-
+                case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
+                {
 
                     tars_a2dp_connected =
                         false;
 
-
                     tars_a2dp_connecting =
                         false;
-
 
                     tars_audio_started =
                         false;
 
+                    tars_media_check_pending =
+                        false;
+
+                    tars_media_start_requested =
+                        false;
+
+                    tars_media_start_pending =
+                        false;
+
+                    tars_media_stop_pending =
+                        false;
 
                     tars_internal_tone =
                         false;
 
-
-                    tars_tone_phase =
-                        0;
-
-
-                    tars_tone_sample_counter =
-                        0;
-
-
-                    tars_pcm_clear_internal();
-
+                    tars_pcm_clear();
 
                     tars_status_text =
                         "A2DP DISCONNECTED";
 
-
                     break;
 
+                }
 
-                case
-                ESP_A2D_CONNECTION_STATE_CONNECTING:
 
+                case ESP_A2D_CONNECTION_STATE_CONNECTING:
+                {
 
                     tars_a2dp_connected =
                         false;
 
-
                     tars_a2dp_connecting =
                         true;
 
-
                     tars_audio_started =
                         false;
-
 
                     tars_status_text =
                         "A2DP CONNECTING";
 
-
                     break;
 
+                }
 
-                case
-                ESP_A2D_CONNECTION_STATE_CONNECTED:
 
+                case ESP_A2D_CONNECTION_STATE_CONNECTED:
+                {
 
                     tars_a2dp_connected =
                         true;
 
-
                     tars_a2dp_connecting =
                         false;
-
 
                     tars_audio_started =
                         false;
 
+                    tars_media_check_pending =
+                        false;
+
+                    tars_media_start_requested =
+                        false;
+
+                    tars_media_start_pending =
+                        false;
+
+                    tars_media_stop_pending =
+                        false;
 
                     tars_status_text =
                         "A2DP CONNECTED";
 
-
                     break;
 
+                }
 
-                case
-                ESP_A2D_CONNECTION_STATE_DISCONNECTING:
 
+                case ESP_A2D_CONNECTION_STATE_DISCONNECTING:
+                {
 
                     tars_a2dp_connected =
                         false;
 
-
                     tars_a2dp_connecting =
                         false;
-
 
                     tars_audio_started =
                         false;
 
-
                     tars_status_text =
                         "A2DP DISCONNECTING";
 
-
                     break;
+
+                }
 
 
                 default:
-
                     break;
 
             }
@@ -894,30 +738,38 @@ tars_a2dp_event_callback(
 
             break;
 
+        }
 
-        /* =============================================
+
+        /* =================================================
            AUDIO STATE
-           ============================================= */
+           ================================================= */
 
-        case
-        ESP_A2D_AUDIO_STATE_EVT:
-
+        case ESP_A2D_AUDIO_STATE_EVT:
+        {
 
             switch (
-                param
-                ->
-                audio_stat
-                .
-                state
+                param->audio_stat.state
             ) {
 
 
-                case
-                ESP_A2D_AUDIO_STATE_STARTED:
-
+                case ESP_A2D_AUDIO_STATE_STARTED:
+                {
 
                     tars_audio_started =
                         true;
+
+                    tars_media_start_pending =
+                        false;
+
+                    tars_media_start_requested =
+                        false;
+
+                    tars_media_check_pending =
+                        false;
+
+                    tars_media_stop_pending =
+                        false;
 
 
                     if (
@@ -938,12 +790,25 @@ tars_a2dp_event_callback(
 
                     break;
 
+                }
 
-                case
-                ESP_A2D_AUDIO_STATE_STOPPED:
 
+                case ESP_A2D_AUDIO_STATE_STOPPED:
+                {
 
                     tars_audio_started =
+                        false;
+
+                    tars_media_start_pending =
+                        false;
+
+                    tars_media_start_requested =
+                        false;
+
+                    tars_media_check_pending =
+                        false;
+
+                    tars_media_stop_pending =
                         false;
 
 
@@ -958,16 +823,17 @@ tars_a2dp_event_callback(
                     else {
 
                         tars_status_text =
-                            "A2DP STOPPED";
+                            "A2DP AUDIO STOPPED";
 
                     }
 
 
                     break;
 
+                }
+
 
                 default:
-
                     break;
 
             }
@@ -975,9 +841,177 @@ tars_a2dp_event_callback(
 
             break;
 
+        }
+
+
+        /* =================================================
+           MEDIA CONTROL ACK
+
+           INI BAGIAN PALING PENTING.
+           ================================================= */
+
+        case ESP_A2D_MEDIA_CTRL_ACK_EVT:
+        {
+
+            /*
+               CHECK_SRC_RDY ACK
+            */
+
+            if (
+                param->media_ctrl_stat.cmd
+                ==
+                ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY
+            ) {
+
+                tars_media_check_pending =
+                    false;
+
+
+                if (
+                    param->media_ctrl_stat.status
+                    ==
+                    ESP_A2D_MEDIA_CTRL_ACK_SUCCESS
+                ) {
+
+                    /*
+                       Jika sebelumnya
+                       ada permintaan start,
+                       baru sekarang START.
+                    */
+
+                    if (
+                        tars_media_start_requested &&
+                        !tars_audio_started &&
+                        tars_a2dp_connected
+                    ) {
+
+                        tars_media_start_pending =
+                            true;
+
+
+                        tars_status_text =
+                            "A2DP AUDIO STARTING";
+
+
+                        esp_err_t ret =
+                            esp_a2d_media_ctrl(
+                                ESP_A2D_MEDIA_CTRL_START
+                            );
+
+
+                        if (
+                            ret != ESP_OK
+                        ) {
+
+                            tars_media_start_pending =
+                                false;
+
+                            tars_media_start_requested =
+                                false;
+
+                            tars_status_text =
+                                "A2DP START FAILED";
+
+                        }
+
+                    }
+
+                }
+                else {
+
+                    tars_media_start_requested =
+                        false;
+
+                    tars_media_start_pending =
+                        false;
+
+                    tars_status_text =
+                        "A2DP SOURCE NOT READY";
+
+                }
+
+
+                break;
+
+            }
+
+
+            /*
+               START ACK
+            */
+
+            if (
+                param->media_ctrl_stat.cmd
+                ==
+                ESP_A2D_MEDIA_CTRL_START
+            ) {
+
+                if (
+                    param->media_ctrl_stat.status
+                    !=
+                    ESP_A2D_MEDIA_CTRL_ACK_SUCCESS
+                ) {
+
+                    tars_media_start_pending =
+                        false;
+
+                    tars_media_start_requested =
+                        false;
+
+                    tars_status_text =
+                        "A2DP START ACK FAILED";
+
+                }
+
+
+                break;
+
+            }
+
+
+            /*
+               STOP ACK
+            */
+
+            if (
+                param->media_ctrl_stat.cmd
+                ==
+                ESP_A2D_MEDIA_CTRL_STOP
+            ) {
+
+                tars_media_stop_pending =
+                    false;
+
+
+                if (
+                    param->media_ctrl_stat.status
+                    ==
+                    ESP_A2D_MEDIA_CTRL_ACK_SUCCESS
+                ) {
+
+                    tars_status_text =
+                        "A2DP STOP REQUEST ACCEPTED";
+
+                }
+                else {
+
+                    tars_status_text =
+                        "A2DP STOP ACK FAILED";
+
+                }
+
+
+                break;
+
+            }
+
+
+            break;
+
+        }
+
 
         default:
-
             break;
 
     }
@@ -989,18 +1023,15 @@ tars_a2dp_event_callback(
    BLUETOOTH GAP CALLBACK
    ========================================================= */
 
-static void
-tars_gap_callback(
+static void tars_gap_callback(
     esp_bt_gap_cb_event_t event,
     esp_bt_gap_cb_param_t *param
-) {
-
+)
+{
     if (
         param == NULL
     ) {
-
         return;
-
     }
 
 
@@ -1009,15 +1040,24 @@ tars_gap_callback(
     ) {
 
 
-        /* =============================================
+        /* =================================================
            DISCOVERY RESULT
-           ============================================= */
+           ================================================= */
 
-        case
-        ESP_BT_GAP_DISC_RES_EVT:
-
-
+        case ESP_BT_GAP_DISC_RES_EVT:
         {
+
+            /*
+               Jangan proses lagi
+               jika target sudah ditemukan.
+            */
+
+            if (
+                tars_device_found
+            ) {
+                break;
+            }
+
 
             uint8_t *eir =
                 NULL;
@@ -1026,43 +1066,26 @@ tars_gap_callback(
             for (
                 int i = 0;
 
-                i <
-                param
-                ->
-                disc_res
-                .
-                num_prop;
+                i < param->disc_res.num_prop;
 
                 i++
             ) {
 
                 esp_bt_gap_dev_prop_t
-                *prop =
-                    &
-                    param
-                    ->
-                    disc_res
-                    .
-                    prop[
-                        i
-                    ];
+                    *prop =
+                        &
+                        param->disc_res.prop[i];
 
 
                 if (
-                    prop
-                    ->
-                    type
+                    prop->type
                     ==
                     ESP_BT_GAP_DEV_PROP_EIR
                 ) {
 
                     eir =
-                        (
-                            uint8_t *
-                        )
-                        prop
-                        ->
-                        val;
+                        (uint8_t *)
+                        prop->val;
 
                 }
 
@@ -1070,115 +1093,88 @@ tars_gap_callback(
 
 
             if (
-                eir == NULL
+                eir != NULL
             ) {
 
-                break;
-
-            }
-
-
-            uint8_t name_len =
-                0;
+                uint8_t name_len =
+                    0;
 
 
-            uint8_t *name =
-                esp_bt_gap_resolve_eir_data(
-                    eir,
-                    ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME,
-                    &name_len
-                );
-
-
-            if (
-                name == NULL
-            ) {
-
-                name =
+                uint8_t *name =
                     esp_bt_gap_resolve_eir_data(
                         eir,
-                        ESP_BT_EIR_TYPE_SHORT_LOCAL_NAME,
+                        ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME,
                         &name_len
                     );
 
-            }
+
+                /*
+                   Jika complete name tidak ada,
+                   coba short name.
+                */
+
+                if (
+                    name == NULL
+                ) {
+
+                    name =
+                        esp_bt_gap_resolve_eir_data(
+                            eir,
+                            ESP_BT_EIR_TYPE_SHORT_LOCAL_NAME,
+                            &name_len
+                        );
+
+                }
 
 
-            if (
-                name == NULL ||
-                name_len == 0
-            ) {
+                if (
+                    name != NULL &&
+                    name_len > 0
+                ) {
 
-                break;
+                    if (
 
-            }
+                        strlen(
+                            TARS_TARGET_NAME
+                        )
+                        ==
+                        name_len
 
+                        &&
 
-            if (
+                        memcmp(
+                            name,
+                            TARS_TARGET_NAME,
+                            name_len
+                        )
+                        ==
+                        0
 
-                strlen(
-                    TARS_TARGET_NAME
-                )
-                !=
-                name_len
+                    ) {
 
-            ) {
-
-                break;
-
-            }
-
-
-            if (
-
-                memcmp(
-                    name,
-                    TARS_TARGET_NAME,
-                    name_len
-                )
-                !=
-                0
-
-            ) {
-
-                break;
-
-            }
+                        memcpy(
+                            tars_target_bda,
+                            param->disc_res.bda,
+                            ESP_BD_ADDR_LEN
+                        );
 
 
-            /*
-               Target ditemukan.
-            */
-
-            memcpy(
-                tars_target_bda,
-                param
-                ->
-                disc_res
-                .
-                bda,
-                ESP_BD_ADDR_LEN
-            );
+                        tars_device_found =
+                            true;
 
 
-            tars_device_found =
-                true;
+                        /*
+                           Target sudah ditemukan.
 
+                           STOP SCAN agar stack
+                           lebih ringan sebelum connect.
+                        */
 
-            tars_status_text =
-                "I7-TWS FOUND";
+                        esp_bt_gap_cancel_discovery();
 
+                    }
 
-            /*
-               Hentikan scan agar
-               tidak membuang resource.
-            */
-
-            if (
-                tars_scanning
-            ) {
-
-                esp_bt_gap_cancel_discovery();
+                }
 
             }
 
@@ -1188,24 +1184,17 @@ tars_gap_callback(
         }
 
 
-        /* =============================================
+        /* =================================================
            DISCOVERY STATE
-           ============================================= */
+           ================================================= */
 
-        case
-        ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
-
+        case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
+        {
 
             if (
 
-                param
-                ->
-                disc_st_chg
-                .
-                state
-
+                param->disc_st_chg.state
                 ==
-
                 ESP_BT_GAP_DISCOVERY_STOPPED
 
             ) {
@@ -1213,24 +1202,15 @@ tars_gap_callback(
                 tars_scanning =
                     false;
 
-
-                if (
-                    tars_device_found
-                ) {
-
-                    tars_status_text =
-                        "I7-TWS FOUND";
-
-                }
-
             }
 
 
             break;
 
+        }
+
 
         default:
-
             break;
 
     }
@@ -1243,10 +1223,8 @@ tars_gap_callback(
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_start(
-    void
-) {
-
+tars_a2dp_start(void)
+{
     esp_err_t ret;
 
 
@@ -1254,20 +1232,17 @@ tars_a2dp_start(
         tars_bt_started
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS BLUETOOTH ALREADY STARTED",
+            strlen(
                 "TARS BLUETOOTH ALREADY STARTED"
-            );
+            )
+        );
 
     }
 
 
-    /*
-       Controller config.
-    */
-
-    esp_bt_controller_config_t
-    bt_cfg =
+    esp_bt_controller_config_t bt_cfg =
         BT_CONTROLLER_INIT_CONFIG_DEFAULT();
 
 
@@ -1281,10 +1256,12 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: BT CONTROLLER INIT FAILED",
+            strlen(
                 "ERROR: BT CONTROLLER INIT FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1299,10 +1276,12 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: BT CONTROLLER ENABLE FAILED",
+            strlen(
                 "ERROR: BT CONTROLLER ENABLE FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1315,10 +1294,12 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: BLUEDROID INIT FAILED",
+            strlen(
                 "ERROR: BLUEDROID INIT FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1331,10 +1312,12 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: BLUEDROID ENABLE FAILED",
+            strlen(
                 "ERROR: BLUEDROID ENABLE FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1349,10 +1332,12 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: GAP CALLBACK FAILED",
+            strlen(
                 "ERROR: GAP CALLBACK FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1367,23 +1352,28 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: SET DEVICE NAME FAILED",
+            strlen(
                 "ERROR: SET DEVICE NAME FAILED"
-            );
+            )
+        );
 
     }
 
 
     /*
-       TARS dibuat discoverable
-       dan connectable.
+       Tidak perlu membuat ESP32
+       terus-terusan discoverable
+       untuk fungsi A2DP source.
+
+       Tetapi tetap connectable.
     */
 
     ret =
         esp_bt_gap_set_scan_mode(
             ESP_BT_CONNECTABLE,
-            ESP_BT_GENERAL_DISCOVERABLE
+            ESP_BT_NON_CONNECTABLE
         );
 
 
@@ -1391,10 +1381,12 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: SET SCAN MODE FAILED",
+            strlen(
                 "ERROR: SET SCAN MODE FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1409,10 +1401,12 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: A2DP CALLBACK FAILED",
+            strlen(
                 "ERROR: A2DP CALLBACK FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1425,10 +1419,12 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: A2DP SOURCE INIT FAILED",
+            strlen(
                 "ERROR: A2DP SOURCE INIT FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1443,39 +1439,21 @@ tars_a2dp_start(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: AUDIO CALLBACK FAILED",
+            strlen(
                 "ERROR: AUDIO CALLBACK FAILED"
-            );
+            )
+        );
 
     }
 
 
-    /*
-       Reset semua state.
-    */
-
-    tars_pcm_clear_internal();
+    tars_pcm_clear();
 
 
     tars_internal_tone =
         false;
-
-
-    tars_tone_phase =
-        0;
-
-
-    tars_tone_sample_counter =
-        0;
-
-
-    tars_tone_samples_remaining =
-        0;
-
-
-    tars_bt_started =
-        true;
 
 
     tars_scanning =
@@ -1498,14 +1476,36 @@ tars_a2dp_start(
         false;
 
 
+    tars_media_check_pending =
+        false;
+
+
+    tars_media_start_requested =
+        false;
+
+
+    tars_media_start_pending =
+        false;
+
+
+    tars_media_stop_pending =
+        false;
+
+
+    tars_bt_started =
+        true;
+
+
     tars_status_text =
         "TARS BLUETOOTH CLASSIC A2DP READY";
 
 
-    return
-        tars_make_string(
+    return mp_obj_new_str(
+        "TARS BLUETOOTH CLASSIC A2DP READY",
+        strlen(
             "TARS BLUETOOTH CLASSIC A2DP READY"
-        );
+        )
+    );
 
 }
 
@@ -1521,18 +1521,32 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_scan(
-    void
-) {
-
+tars_a2dp_scan(void)
+{
     if (
         !tars_bt_started
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: START BLUETOOTH FIRST",
+            strlen(
                 "ERROR: START BLUETOOTH FIRST"
-            );
+            )
+        );
+
+    }
+
+
+    if (
+        tars_a2dp_connected
+    ) {
+
+        return mp_obj_new_str(
+            "ERROR: ALREADY CONNECTED",
+            strlen(
+                "ERROR: ALREADY CONNECTED"
+            )
+        );
 
     }
 
@@ -1541,17 +1555,15 @@ tars_a2dp_scan(
         tars_scanning
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS ALREADY SCANNING...",
+            strlen(
                 "TARS ALREADY SCANNING..."
-            );
+            )
+        );
 
     }
 
-
-    /*
-       Reset hasil scan sebelumnya.
-    */
 
     tars_device_found =
         false;
@@ -1576,10 +1588,12 @@ tars_a2dp_scan(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: BLUETOOTH SCAN FAILED",
+            strlen(
                 "ERROR: BLUETOOTH SCAN FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1589,13 +1603,15 @@ tars_a2dp_scan(
 
 
     tars_status_text =
-        "SCANNING FOR I7-TWS";
+        "TARS SCANNING";
 
 
-    return
-        tars_make_string(
+    return mp_obj_new_str(
+        "TARS SCANNING FOR I7-TWS...",
+        strlen(
             "TARS SCANNING FOR I7-TWS..."
-        );
+        )
+    );
 
 }
 
@@ -1611,10 +1627,8 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_found(
-    void
-) {
-
+tars_a2dp_found(void)
+{
     if (
         !tars_device_found
     ) {
@@ -1623,18 +1637,22 @@ tars_a2dp_found(
             tars_scanning
         ) {
 
-            return
-                tars_make_string(
+            return mp_obj_new_str(
+                "STILL SCANNING...",
+                strlen(
                     "STILL SCANNING..."
-                );
+                )
+            );
 
         }
 
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "I7-TWS NOT FOUND",
+            strlen(
                 "I7-TWS NOT FOUND"
-            );
+            )
+        );
 
     }
 
@@ -1655,11 +1673,10 @@ tars_a2dp_found(
     );
 
 
-    return
-        mp_obj_new_str(
-            result,
-            strlen(result)
-        );
+    return mp_obj_new_str(
+        result,
+        strlen(result)
+    );
 
 }
 
@@ -1675,18 +1692,18 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_connect(
-    void
-) {
-
+tars_a2dp_connect(void)
+{
     if (
         !tars_bt_started
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: START BLUETOOTH FIRST",
+            strlen(
                 "ERROR: START BLUETOOTH FIRST"
-            );
+            )
+        );
 
     }
 
@@ -1695,10 +1712,12 @@ tars_a2dp_connect(
         !tars_device_found
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: I7-TWS NOT FOUND",
+            strlen(
                 "ERROR: I7-TWS NOT FOUND"
-            );
+            )
+        );
 
     }
 
@@ -1707,10 +1726,12 @@ tars_a2dp_connect(
         tars_a2dp_connected
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS ALREADY CONNECTED",
+            strlen(
                 "TARS ALREADY CONNECTED"
-            );
+            )
+        );
 
     }
 
@@ -1719,10 +1740,28 @@ tars_a2dp_connect(
         tars_a2dp_connecting
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS ALREADY CONNECTING",
+            strlen(
                 "TARS ALREADY CONNECTING"
-            );
+            )
+        );
+
+    }
+
+
+    /*
+       Pastikan scan berhenti.
+    */
+
+    if (
+        tars_scanning
+    ) {
+
+        esp_bt_gap_cancel_discovery();
+
+        tars_scanning =
+            false;
 
     }
 
@@ -1737,10 +1776,12 @@ tars_a2dp_connect(
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: A2DP CONNECT FAILED",
+            strlen(
                 "ERROR: A2DP CONNECT FAILED"
-            );
+            )
+        );
 
     }
 
@@ -1753,10 +1794,12 @@ tars_a2dp_connect(
         "A2DP CONNECTING";
 
 
-    return
-        tars_make_string(
+    return mp_obj_new_str(
+        "TARS CONNECTING TO I7-TWS...",
+        strlen(
             "TARS CONNECTING TO I7-TWS..."
-        );
+        )
+    );
 
 }
 
@@ -1772,18 +1815,18 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_play(
-    void
-) {
-
+tars_a2dp_play(void)
+{
     if (
         !tars_bt_started
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: START BLUETOOTH FIRST",
+            strlen(
                 "ERROR: START BLUETOOTH FIRST"
-            );
+            )
+        );
 
     }
 
@@ -1792,10 +1835,12 @@ tars_a2dp_play(
         !tars_a2dp_connected
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: A2DP NOT CONNECTED",
+            strlen(
                 "ERROR: A2DP NOT CONNECTED"
-            );
+            )
+        );
 
     }
 
@@ -1804,90 +1849,63 @@ tars_a2dp_play(
         tars_audio_started
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "A2DP AUDIO ALREADY STREAMING",
+            strlen(
                 "A2DP AUDIO ALREADY STREAMING"
-            );
+            )
+        );
+
+    }
+
+
+    if (
+        pcm_used == 0
+    ) {
+
+        return mp_obj_new_str(
+            "ERROR: PCM BUFFER EMPTY - WRITE AUDIO FIRST",
+            strlen(
+                "ERROR: PCM BUFFER EMPTY - WRITE AUDIO FIRST"
+            )
+        );
 
     }
 
 
     /*
-       PCM harus tersedia.
+       Gunakan PCM,
+       bukan internal tone.
     */
 
-    if (
-        !tars_internal_tone &&
-        tars_pcm_get_used() == 0
-    ) {
-
-        return
-            tars_make_string(
-                "ERROR: PCM BUFFER EMPTY - WRITE AUDIO FIRST"
-            );
-
-    }
+    tars_internal_tone =
+        false;
 
 
-    esp_err_t ret;
-
-
-    ret =
-        esp_a2d_media_ctrl(
-            ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY
-        );
+    esp_err_t ret =
+        tars_request_audio_start();
 
 
     if (
         ret != ESP_OK
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: A2DP SOURCE NOT READY",
+            strlen(
                 "ERROR: A2DP SOURCE NOT READY"
-            );
-
-    }
-
-
-    ret =
-        esp_a2d_media_ctrl(
-            ESP_A2D_MEDIA_CTRL_START
+            )
         );
 
-
-    if (
-        ret != ESP_OK
-    ) {
-
-        return
-            tars_make_string(
-                "ERROR: A2DP AUDIO START FAILED"
-            );
-
     }
 
 
-    if (
-        tars_internal_tone
-    ) {
-
-        tars_status_text =
-            "A2DP INTERNAL TONE STARTING";
-
-    }
-    else {
-
-        tars_status_text =
-            "A2DP AUDIO STARTING";
-
-    }
-
-
-    return
-        tars_make_string(
-            "TARS A2DP AUDIO STARTING..."
-        );
+    return mp_obj_new_str(
+        "TARS A2DP START REQUESTED - WAITING FOR ACK",
+        strlen(
+            "TARS A2DP START REQUESTED - WAITING FOR ACK"
+        )
+    );
 
 }
 
@@ -1899,105 +1917,22 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 
 /* =========================================================
-   STOP AUDIO
+   INTERNAL TONE
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_stop(
-    void
-) {
-
-    /*
-       Tone dimatikan.
-    */
-
-    tars_internal_tone =
-        false;
-
-
-    tars_tone_phase =
-        0;
-
-
-    tars_tone_sample_counter =
-        0;
-
-
-    if (
-        !tars_audio_started
-    ) {
-
-        if (
-            tars_a2dp_connected
-        ) {
-
-            tars_status_text =
-                "A2DP CONNECTED";
-
-        }
-
-
-        return
-            tars_make_string(
-                "A2DP AUDIO ALREADY STOPPED"
-            );
-
-    }
-
-
-    esp_err_t ret =
-        esp_a2d_media_ctrl(
-            ESP_A2D_MEDIA_CTRL_STOP
-        );
-
-
-    if (
-        ret != ESP_OK
-    ) {
-
-        return
-            tars_make_string(
-                "ERROR: A2DP AUDIO STOP FAILED"
-            );
-
-    }
-
-
-    tars_status_text =
-        "A2DP AUDIO STOPPING";
-
-
-    return
-        tars_make_string(
-            "TARS A2DP AUDIO STOPPING..."
-        );
-
-}
-
-
-static MP_DEFINE_CONST_FUN_OBJ_0(
-    tars_a2dp_stop_obj,
-    tars_a2dp_stop
-);
-
-
-/* =========================================================
-   INTERNAL TONE START
-   ========================================================= */
-
-static mp_obj_t
-tars_a2dp_tone(
-    void
-) {
-
+tars_a2dp_tone(void)
+{
     if (
         !tars_bt_started
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: START BLUETOOTH FIRST",
+            strlen(
                 "ERROR: START BLUETOOTH FIRST"
-            );
+            )
+        );
 
     }
 
@@ -2006,10 +1941,12 @@ tars_a2dp_tone(
         !tars_a2dp_connected
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: A2DP NOT CONNECTED",
+            strlen(
                 "ERROR: A2DP NOT CONNECTED"
-            );
+            )
+        );
 
     }
 
@@ -2030,17 +1967,14 @@ tars_a2dp_tone(
         0;
 
 
-    tars_tone_samples_remaining =
-        0;
-
-
     tars_tone_frequency =
         440;
 
 
     /*
-       Jika audio sudah berjalan,
-       callback langsung menggunakan tone.
+       Jika sudah streaming,
+       tone langsung digunakan
+       oleh callback.
     */
 
     if (
@@ -2051,22 +1985,38 @@ tars_a2dp_tone(
             "A2DP INTERNAL TONE STREAMING";
 
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS INTERNAL 440HZ TONE ACTIVE",
+            strlen(
                 "TARS INTERNAL 440HZ TONE ACTIVE"
-            );
+            )
+        );
 
     }
 
 
     /*
-       Cek source ready.
+       Jika proses start sudah berjalan,
+       jangan ulangi.
     */
 
+    if (
+        tars_media_check_pending ||
+        tars_media_start_pending
+    ) {
+
+        return mp_obj_new_str(
+            "TARS TONE START ALREADY PENDING",
+            strlen(
+                "TARS TONE START ALREADY PENDING"
+            )
+        );
+
+    }
+
+
     esp_err_t ret =
-        esp_a2d_media_ctrl(
-            ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY
-        );
+        tars_request_audio_start();
 
 
     if (
@@ -2077,44 +2027,22 @@ tars_a2dp_tone(
             false;
 
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "ERROR: TONE SOURCE NOT READY",
+            strlen(
                 "ERROR: TONE SOURCE NOT READY"
-            );
+            )
+        );
 
     }
 
 
-    ret =
-        esp_a2d_media_ctrl(
-            ESP_A2D_MEDIA_CTRL_START
-        );
-
-
-    if (
-        ret != ESP_OK
-    ) {
-
-        tars_internal_tone =
-            false;
-
-
-        return
-            tars_make_string(
-                "ERROR: TONE START FAILED"
-            );
-
-    }
-
-
-    tars_status_text =
-        "A2DP INTERNAL TONE STARTING";
-
-
-    return
-        tars_make_string(
-            "TARS INTERNAL 440HZ TONE STARTING..."
-        );
+    return mp_obj_new_str(
+        "TARS INTERNAL TONE REQUESTED - WAITING FOR ACK",
+        strlen(
+            "TARS INTERNAL TONE REQUESTED - WAITING FOR ACK"
+        )
+    );
 
 }
 
@@ -2127,22 +2055,19 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 /* =========================================================
    STOP INTERNAL TONE
+
+   Tone dimatikan.
+
+   Jika audio sedang berjalan,
+   PCM akan digunakan.
+
+   Untuk menghentikan streaming
+   sepenuhnya gunakan stop().
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_tone_stop(
-    void
-) {
-
-    /*
-       Penting:
-
-       Jangan hanya mengubah flag.
-
-       Kita juga meminta A2DP
-       menghentikan media streaming.
-    */
-
+tars_a2dp_tone_stop(void)
+{
     tars_internal_tone =
         false;
 
@@ -2159,50 +2084,18 @@ tars_a2dp_tone_stop(
         tars_audio_started
     ) {
 
-        esp_err_t ret =
-            esp_a2d_media_ctrl(
-                ESP_A2D_MEDIA_CTRL_STOP
-            );
-
-
-        if (
-            ret != ESP_OK
-        ) {
-
-            return
-                tars_make_string(
-                    "ERROR: TONE STOP FAILED"
-                );
-
-        }
-
-
         tars_status_text =
-            "A2DP TONE STOPPING";
-
-
-        return
-            tars_make_string(
-                "TARS INTERNAL TONE STOPPING..."
-            );
+            "A2DP AUDIO STREAMING";
 
     }
 
 
-    if (
-        tars_a2dp_connected
-    ) {
-
-        tars_status_text =
-            "A2DP CONNECTED";
-
-    }
-
-
-    return
-        tars_make_string(
+    return mp_obj_new_str(
+        "TARS INTERNAL TONE STOPPED",
+        strlen(
             "TARS INTERNAL TONE STOPPED"
-        );
+        )
+    );
 
 }
 
@@ -2214,16 +2107,92 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 
 /* =========================================================
+   STOP AUDIO STREAM
+   ========================================================= */
+
+static mp_obj_t
+tars_a2dp_stop(void)
+{
+    if (
+        !tars_a2dp_connected
+    ) {
+
+        return mp_obj_new_str(
+            "ERROR: A2DP NOT CONNECTED",
+            strlen(
+                "ERROR: A2DP NOT CONNECTED"
+            )
+        );
+
+    }
+
+
+    /*
+       Matikan tone.
+    */
+
+    tars_internal_tone =
+        false;
+
+
+    if (
+        !tars_audio_started
+    ) {
+
+        return mp_obj_new_str(
+            "A2DP AUDIO ALREADY STOPPED",
+            strlen(
+                "A2DP AUDIO ALREADY STOPPED"
+            )
+        );
+
+    }
+
+
+    esp_err_t ret =
+        tars_request_audio_stop();
+
+
+    if (
+        ret != ESP_OK
+    ) {
+
+        return mp_obj_new_str(
+            "ERROR: A2DP STOP FAILED",
+            strlen(
+                "ERROR: A2DP STOP FAILED"
+            )
+        );
+
+    }
+
+
+    return mp_obj_new_str(
+        "TARS A2DP STOP REQUESTED",
+        strlen(
+            "TARS A2DP STOP REQUESTED"
+        )
+    );
+
+}
+
+
+static MP_DEFINE_CONST_FUN_OBJ_0(
+    tars_a2dp_stop_obj,
+    tars_a2dp_stop
+);
+
+
+/* =========================================================
    WRITE PCM
    ========================================================= */
 
 static mp_obj_t
 tars_a2dp_write(
     mp_obj_t data_in
-) {
-
-    mp_buffer_info_t
-    buffer_info;
+)
+{
+    mp_buffer_info_t buffer_info;
 
 
     mp_get_buffer_raise(
@@ -2237,53 +2206,18 @@ tars_a2dp_write(
         !tars_a2dp_connected
     ) {
 
-        return
-            mp_obj_new_int(
-                0
-            );
-
-    }
-
-
-    if (
-        buffer_info.buf == NULL ||
-        buffer_info.len == 0
-    ) {
-
-        return
-            mp_obj_new_int(
-                0
-            );
+        return mp_obj_new_int(0);
 
     }
 
 
     /*
        Jika Python mengirim PCM,
-       internal tone dimatikan.
-
-       Tetapi stream tidak dihentikan.
-       Callback akan langsung membaca
-       PCM buffer.
+       matikan tone.
     */
 
     tars_internal_tone =
         false;
-
-
-    size_t len =
-        buffer_info.len;
-
-
-    /*
-       PCM stereo frame.
-    */
-
-    len -=
-        (
-            len %
-            TARS_FRAME_BYTES
-        );
 
 
     size_t written =
@@ -2292,14 +2226,13 @@ tars_a2dp_write(
                 const uint8_t *
             )
             buffer_info.buf,
-            len
+            buffer_info.len
         );
 
 
-    return
-        mp_obj_new_int_from_uint(
-            written
-        );
+    return mp_obj_new_int_from_uint(
+        written
+    );
 
 }
 
@@ -2315,14 +2248,8 @@ static MP_DEFINE_CONST_FUN_OBJ_1(
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_buffer(
-    void
-) {
-
-    size_t used =
-        tars_pcm_get_used();
-
-
+tars_a2dp_buffer(void)
+{
     char result[80];
 
 
@@ -2330,22 +2257,15 @@ tars_a2dp_buffer(
         result,
         sizeof(result),
         "PCM BUFFER: %u / %u BYTES",
-        (
-            unsigned int
-        )
-        used,
-        (
-            unsigned int
-        )
-        PCM_BUFFER_SIZE
+        (unsigned int)pcm_used,
+        (unsigned int)PCM_BUFFER_SIZE
     );
 
 
-    return
-        mp_obj_new_str(
-            result,
-            strlen(result)
-        );
+    return mp_obj_new_str(
+        result,
+        strlen(result)
+    );
 
 }
 
@@ -2357,21 +2277,21 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 
 /* =========================================================
-   CLEAR PCM BUFFER
+   CLEAR BUFFER
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_clear(
-    void
-) {
-
-    tars_pcm_clear_internal();
+tars_a2dp_clear(void)
+{
+    tars_pcm_clear();
 
 
-    return
-        tars_make_string(
+    return mp_obj_new_str(
+        "PCM BUFFER CLEARED",
+        strlen(
             "PCM BUFFER CLEARED"
-        );
+        )
+    );
 
 }
 
@@ -2387,18 +2307,14 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_status(
-    void
-) {
-
-    return
-        mp_obj_new_str(
-            tars_status_text,
-            strlen(
-                tars_status_text
-            )
-        );
-
+tars_a2dp_status(void)
+{
+    return mp_obj_new_str(
+        tars_status_text,
+        strlen(
+            tars_status_text
+        )
+    );
 }
 
 
@@ -2413,18 +2329,61 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
    ========================================================= */
 
 static mp_obj_t
-tars_a2dp_test(
-    void
-) {
-
+tars_a2dp_test(void)
+{
     if (
-        tars_internal_tone
+        tars_media_stop_pending
     ) {
 
-        return
-            tars_make_string(
-                "TARS INTERNAL TONE ACTIVE"
-            );
+        return mp_obj_new_str(
+            "TARS A2DP STOPPING",
+            strlen(
+                "TARS A2DP STOPPING"
+            )
+        );
+
+    }
+
+
+    if (
+        tars_internal_tone &&
+        tars_audio_started
+    ) {
+
+        return mp_obj_new_str(
+            "TARS INTERNAL TONE STREAMING",
+            strlen(
+                "TARS INTERNAL TONE STREAMING"
+            )
+        );
+
+    }
+
+
+    if (
+        tars_media_start_pending
+    ) {
+
+        return mp_obj_new_str(
+            "TARS A2DP START PENDING",
+            strlen(
+                "TARS A2DP START PENDING"
+            )
+        );
+
+    }
+
+
+    if (
+        tars_media_check_pending
+    ) {
+
+        return mp_obj_new_str(
+            "TARS A2DP CHECKING SOURCE",
+            strlen(
+                "TARS A2DP CHECKING SOURCE"
+            )
+        );
 
     }
 
@@ -2433,10 +2392,12 @@ tars_a2dp_test(
         tars_audio_started
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS A2DP AUDIO STREAMING",
+            strlen(
                 "TARS A2DP AUDIO STREAMING"
-            );
+            )
+        );
 
     }
 
@@ -2445,10 +2406,12 @@ tars_a2dp_test(
         tars_a2dp_connected
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS A2DP CONNECTED",
+            strlen(
                 "TARS A2DP CONNECTED"
-            );
+            )
+        );
 
     }
 
@@ -2457,10 +2420,12 @@ tars_a2dp_test(
         tars_a2dp_connecting
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS A2DP CONNECTING",
+            strlen(
                 "TARS A2DP CONNECTING"
-            );
+            )
+        );
 
     }
 
@@ -2469,10 +2434,12 @@ tars_a2dp_test(
         tars_scanning
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS A2DP SCANNING",
+            strlen(
                 "TARS A2DP SCANNING"
-            );
+            )
+        );
 
     }
 
@@ -2481,19 +2448,22 @@ tars_a2dp_test(
         tars_bt_started
     ) {
 
-        return
-            tars_make_string(
+        return mp_obj_new_str(
+            "TARS A2DP STARTED",
+            strlen(
                 "TARS A2DP STARTED"
-            );
+            )
+        );
 
     }
 
 
-    return
-        tars_make_string(
+    return mp_obj_new_str(
+        "TARS A2DP READY",
+        strlen(
             "TARS A2DP READY"
-        );
-
+        )
+    );
 }
 
 
@@ -2591,17 +2561,6 @@ tars_a2dp_globals_table[] =
 
     {
         MP_ROM_QSTR(
-            MP_QSTR_stop
-        ),
-
-        MP_ROM_PTR(
-            &tars_a2dp_stop_obj
-        )
-    },
-
-
-    {
-        MP_ROM_QSTR(
             MP_QSTR_tone
         ),
 
@@ -2618,6 +2577,17 @@ tars_a2dp_globals_table[] =
 
         MP_ROM_PTR(
             &tars_a2dp_tone_stop_obj
+        )
+    },
+
+
+    {
+        MP_ROM_QSTR(
+            MP_QSTR_stop
+        ),
+
+        MP_ROM_PTR(
+            &tars_a2dp_stop_obj
         )
     },
 
@@ -2681,7 +2651,6 @@ static MP_DEFINE_CONST_DICT(
 const mp_obj_module_t
 tars_a2dp_user_cmodule =
 {
-
     .base =
     {
         &mp_type_module
@@ -2692,7 +2661,6 @@ tars_a2dp_user_cmodule =
             mp_obj_dict_t *
         )
         &tars_a2dp_globals
-
 };
 
 
