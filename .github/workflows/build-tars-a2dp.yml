@@ -44,6 +44,7 @@ jobs:
       - name: Setup MicroPython submodules
         run: |
           cd micropython
+
           git submodule update \
             --init \
             --recursive \
@@ -64,59 +65,10 @@ jobs:
             --recursive \
             --filter=tree:0
 
-      - name: Patch A2DP source queue for balanced RAM use
-        shell: bash
-        run: |
-          A2DP_FILE="$GITHUB_WORKSPACE/esp-idf/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_a2dp_source.c"
-
-          echo "=================================================="
-          echo "A2DP SOURCE QUEUE CHECK"
-          echo "=================================================="
-
-          if [ ! -f "$A2DP_FILE" ]; then
-            echo "ERROR: A2DP SOURCE FILE NOT FOUND"
-            echo "$A2DP_FILE"
-            exit 1
-          fi
-
-          echo ""
-          echo "BEFORE PATCH:"
-          grep -n \
-            -E "BTC_MEDIA_AA_BUF_SIZE|MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE" \
-            || true
-
-          echo ""
-          echo "PATCHING MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ TO 16..."
-
-          sed -i \
-            -E \
-            's/(#define[[:space:]]+MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ[[:space:]]+)\([0-9]+\)/\1(16)/' \
-            "$A2DP_FILE"
-
-          echo ""
-          echo "AFTER PATCH:"
-          grep -n \
-            -E "BTC_MEDIA_AA_BUF_SIZE|MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE" \
-            || true
-
-          echo ""
-          echo "VERIFY PATCH RESULT:"
-
-          if grep -Eq \
-            '#define[[:space:]]+MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ[[:space:]]+\(16\)' \
-            "$A2DP_FILE"; then
-
-            echo "PATCH SUCCESS: QUEUE SIZE = 16"
-          else
-            echo "PATCH FAILED"
-            exit 1
-          fi
-
       - name: Install ESP-IDF
         run: |
           cd esp-idf
+
           ./install.sh esp32
 
       - name: Build mpy-cross
@@ -405,20 +357,24 @@ jobs:
           echo "MODULEDEFS.COLLECTED TARS"
           echo "=================================================="
 
-          grep -n \
-            -E "tars_a2dp|tars_bluetooth" \
-            "$BUILD/genhdr/moduledefs.collected" \
-            || true
+          if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
+            grep -n \
+              -E "tars_a2dp|tars_bluetooth" \
+              "$BUILD/genhdr/moduledefs.collected" \
+              || true
+          fi
 
           echo ""
           echo "=================================================="
           echo "MODULEDEFS.H TARS"
           echo "=================================================="
 
-          grep -n \
-            -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
-            "$BUILD/genhdr/moduledefs.h" \
-            || true
+          if [ -f "$BUILD/genhdr/moduledefs.h" ]; then
+            grep -n \
+              -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
+              "$BUILD/genhdr/moduledefs.h" \
+              || true
+          fi
 
       - name: Prepare firmware
         if: success()
