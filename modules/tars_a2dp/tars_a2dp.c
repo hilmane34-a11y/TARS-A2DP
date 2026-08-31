@@ -32,13 +32,11 @@
 #define TARS_TARGET_NAME "I7-TWS"
 
 /*
-   Dibuat lebih kecil untuk menghemat RAM.
+   PCM buffer dibuat kecil agar tidak terlalu
+   membebani RAM ESP32.
 
-   Error sebelumnya:
-   malloc failed size=4112
-
-   Buffer PCM besar dapat mempersempit RAM
-   yang tersedia untuk Bluetooth A2DP.
+   Buffer ini hanya menyimpan PCM dari MicroPython.
+   Buffer Bluetooth internal tetap dikelola ESP-IDF.
 */
 
 #define PCM_BUFFER_SIZE 2048
@@ -229,16 +227,6 @@ static int32_t tars_generate_tone(
 
     int32_t position = 0;
 
-    /*
-       PERBAIKAN PENTING:
-
-       Cast uint64_t harus:
-       (uint64_t)tars_tone_frequency
-
-       Bukan penulisan cast tanpa tanda
-       kurung yang menyebabkan build gagal.
-    */
-
     uint32_t phase_increment =
         (uint32_t)(
             (
@@ -264,10 +252,6 @@ static int32_t tars_generate_tone(
             sample = -5000;
         }
 
-        /*
-           LEFT CHANNEL
-        */
-
         data[position + 0] =
             (uint8_t)(
                 sample & 0xFF
@@ -277,10 +261,6 @@ static int32_t tars_generate_tone(
             (uint8_t)(
                 (sample >> 8) & 0xFF
             );
-
-        /*
-           RIGHT CHANNEL
-        */
 
         data[position + 2] =
             (uint8_t)(
@@ -943,15 +923,6 @@ tars_a2dp_start(void)
         );
     }
 
-    /*
-       PERBAIKAN:
-
-       Gunakan initializer langsung.
-       Jangan assignment macro setelah deklarasi
-       dengan bentuk yang dapat menghasilkan
-       error expected expression before '{'.
-    */
-
     esp_bt_controller_config_t bt_cfg =
         BT_CONTROLLER_INIT_CONFIG_DEFAULT();
 
@@ -1047,10 +1018,17 @@ tars_a2dp_start(void)
         );
     }
 
+    /*
+       PERBAIKAN PENTING:
+
+       ESP32 harus dibuat CONNECTABLE dan DISCOVERABLE
+       agar nama TARS dapat terlihat dari perangkat lain.
+    */
+
     ret =
         esp_bt_gap_set_scan_mode(
             ESP_BT_CONNECTABLE,
-            ESP_BT_NON_CONNECTABLE
+            ESP_BT_GENERAL_DISCOVERABLE
         );
 
     if (
