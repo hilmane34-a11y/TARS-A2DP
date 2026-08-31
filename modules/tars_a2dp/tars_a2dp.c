@@ -154,6 +154,8 @@ static size_t tars_pcm_read(
 
 /* =========================================================
    A2DP AUDIO DATA CALLBACK
+
+   ESP-IDF memanggil callback ini saat membutuhkan PCM.
    ========================================================= */
 
 static int32_t tars_a2dp_data_callback(
@@ -181,7 +183,7 @@ static int32_t tars_a2dp_data_callback(
         memset(
             data,
             0,
-            len
+            (size_t)len
         );
 
         return len;
@@ -202,7 +204,7 @@ static int32_t tars_a2dp_data_callback(
 
     /*
        Jika PCM kurang,
-       sisa diisi silence.
+       isi sisanya dengan silence.
     */
 
     if (
@@ -775,6 +777,7 @@ static mp_obj_t tars_a2dp_start(void) {
 
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_start_obj,
     tars_a2dp_start
@@ -861,6 +864,7 @@ static mp_obj_t tars_a2dp_scan(void) {
 
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_scan_obj,
     tars_a2dp_scan
@@ -925,6 +929,7 @@ static mp_obj_t tars_a2dp_found(void) {
     );
 
 }
+
 
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_found_obj,
@@ -1017,6 +1022,7 @@ static mp_obj_t tars_a2dp_connect(void) {
 
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_connect_obj,
     tars_a2dp_connect
@@ -1024,7 +1030,10 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 
 /* =========================================================
-   START A2DP AUDIO STREAM
+   PLAY
+
+   Mencoba memulai streaming audio A2DP
+   setelah headset sudah terhubung.
    ========================================================= */
 
 static mp_obj_t tars_a2dp_play(void) {
@@ -1071,6 +1080,10 @@ static mp_obj_t tars_a2dp_play(void) {
     }
 
 
+    /*
+       Beritahu A2DP bahwa source siap.
+    */
+
     esp_err_t ret =
         esp_a2d_media_ctrl(
             ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY
@@ -1090,6 +1103,10 @@ static mp_obj_t tars_a2dp_play(void) {
 
     }
 
+
+    /*
+       Mulai audio stream.
+    */
 
     ret =
         esp_a2d_media_ctrl(
@@ -1124,6 +1141,7 @@ static mp_obj_t tars_a2dp_play(void) {
 
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_play_obj,
     tars_a2dp_play
@@ -1132,6 +1150,10 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 /* =========================================================
    WRITE PCM AUDIO
+
+   Python:
+
+   tars_a2dp.write(audio_bytes)
    ========================================================= */
 
 static mp_obj_t tars_a2dp_write(
@@ -1173,6 +1195,7 @@ static mp_obj_t tars_a2dp_write(
 
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_1(
     tars_a2dp_write_obj,
     tars_a2dp_write
@@ -1206,6 +1229,7 @@ static mp_obj_t tars_a2dp_buffer(void) {
 
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_buffer_obj,
     tars_a2dp_buffer
@@ -1230,6 +1254,7 @@ static mp_obj_t tars_a2dp_clear(void) {
 
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_clear_obj,
     tars_a2dp_clear
@@ -1250,6 +1275,7 @@ static mp_obj_t tars_a2dp_status(void) {
     );
 
 }
+
 
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_status_obj,
@@ -1327,6 +1353,7 @@ static mp_obj_t tars_a2dp_test(void) {
     );
 
 }
+
 
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_test_obj,
