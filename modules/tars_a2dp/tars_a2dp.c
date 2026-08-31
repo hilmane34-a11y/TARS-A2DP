@@ -21,6 +21,13 @@
    Scan + Connect
    PCM Streaming
    Internal Tone Test
+
+   AUDIO REVISION:
+   - Bluetooth system preserved
+   - Media ACK sequence preserved
+   - Tone PCM is pre-generated
+   - Audio callback kept lightweight
+   - Continuous tone buffer looping
    ========================================================= */
 
 
@@ -31,11 +38,19 @@
 #define TARS_DEVICE_NAME "TARS"
 #define TARS_TARGET_NAME "I7-TWS"
 
-#define PCM_BUFFER_SIZE 2048
+#define PCM_BUFFER_SIZE 8192
 
 #define TARS_SAMPLE_RATE 44100
 #define TARS_CHANNELS 2
 #define TARS_BITS_PER_SAMPLE 16
+
+#define TARS_FRAME_BYTES 4
+
+#define TARS_TONE_FREQUENCY 440
+#define TARS_TONE_PERIOD_FRAMES 441
+
+#define TARS_TONE_BUFFER_SIZE \
+    (TARS_TONE_PERIOD_FRAMES * TARS_FRAME_BYTES)
 
 
 /* =========================================================
@@ -75,12 +90,25 @@ static volatile size_t pcm_used = 0;
 
 /* =========================================================
    INTERNAL TONE
+
+   The tone is generated once when tone() is called.
+
+   The A2DP callback then only copies the already prepared
+   PCM data and loops it continuously.
+
+   This keeps the Bluetooth callback as light as possible.
    ========================================================= */
 
 static bool tars_internal_tone = false;
 
-static uint32_t tars_tone_phase = 0;
-static uint32_t tars_tone_frequency = 440;
+static uint8_t
+tars_tone_buffer[TARS_TONE_BUFFER_SIZE];
+
+static size_t
+tars_tone_read_pos = 0;
+
+static bool
+tars_tone_buffer_ready = false;
 
 
 /* =========================================================
@@ -186,15 +214,115 @@ static size_t tars_pcm_read(
 
 
 /* =========================================================
-   GENERATE INTERNAL TONE
+   PREPARE INTERNAL TONE
 
-   REVISED:
-   - Entire output buffer initialized.
-   - Phase remains continuous between callbacks.
-   - Stereo 16-bit PCM little endian.
+   440 Hz square wave
+   441 samples = exactly 10 periods at 44100 Hz
+
+   Therefore:
+   44100 / 440 is approximately 100.227 samples.
+
+   We create a repeating 441-frame block with an integer
+   waveform pattern designed for stable continuous playback.
+
+   Stereo:
+   LEFT  = 16-bit little endian
+   RIGHT = 16-bit little endian
    ========================================================= */
 
-static int32_t tars_generate_tone(
+static void tars_prepare_tone(void)
+{
+    size_t position = 0;
+
+    uint32_t phase = 0;
+
+    uint32_t phase_increment =
+        (uint32_t)(
+            (
+                (uint64_t)
+                TARS_TONE_FREQUENCY *
+                4294967296ULL
+            )
+            /
+            TARS_SAMPLE_RATE
+        );
+
+    while (
+        position <
+        TARS_TONE_BUFFER_SIZE
+    ) {
+        int16_t sample;
+
+        /*
+           Moderate amplitude.
+
+           This avoids unnecessarily loud clipping.
+        */
+
+        if (
+            phase &
+            0x80000000UL
+        ) {
+            sample = 2500;
+        }
+        else {
+            sample = -2500;
+        }
+
+        /*
+           LEFT
+        */
+
+        tars_tone_buffer[position + 0] =
+            (uint8_t)(
+                sample & 0xFF
+            );
+
+        tars_tone_buffer[position + 1] =
+            (uint8_t)(
+                (sample >> 8) & 0xFF
+            );
+
+        /*
+           RIGHT
+        */
+
+        tars_tone_buffer[position + 2] =
+            (uint8_t)(
+                sample & 0xFF
+            );
+
+        tars_tone_buffer[position + 3] =
+            (uint8_t)(
+                (sample >> 8) & 0xFF
+            );
+
+        phase +=
+            phase_increment;
+
+        position +=
+            TARS_FRAME_BYTES;
+    }
+
+    tars_tone_read_pos =
+        0;
+
+    tars_tone_buffer_ready =
+        true;
+}
+
+
+/* =========================================================
+   COPY INTERNAL TONE
+
+   IMPORTANT:
+
+   This function does not generate samples.
+
+   It only copies pre-generated PCM data and loops it.
+   ========================================================= */
+
+static int32_t tars_copy_tone(
     uint8_t *data,
     int32_t len
 )
@@ -206,114 +334,72 @@ static int32_t tars_generate_tone(
         return 0;
     }
 
-    /*
-       Clear entire requested buffer first.
+    if (
+        !tars_tone_buffer_ready
+    ) {
+        /*
+           Safety fallback.
 
-       This guarantees that any trailing bytes
-       are valid silence.
-    */
+           Normally the buffer is prepared before streaming.
+        */
 
-    memset(
-        data,
-        0,
-        (size_t)len
-    );
-
-    /*
-       One stereo frame:
-
-       LEFT  = 16-bit = 2 bytes
-       RIGHT = 16-bit = 2 bytes
-
-       Total = 4 bytes
-    */
-
-    int32_t usable_len =
-        len - (len % 4);
-
-    int32_t position = 0;
-
-    uint32_t phase_increment =
-        (uint32_t)(
-            (
-                (uint64_t)tars_tone_frequency *
-                4294967296ULL
-            )
-            /
-            TARS_SAMPLE_RATE
+        memset(
+            data,
+            0,
+            (size_t)len
         );
 
-    while (
-        position < usable_len
-    ) {
-        int16_t sample;
-
-        /*
-           Square wave.
-
-           Lower amplitude prevents unnecessary
-           clipping during the test.
-        */
-
-        if (
-            tars_tone_phase &
-            0x80000000UL
-        ) {
-            sample = 3000;
-        }
-        else {
-            sample = -3000;
-        }
-
-        /*
-           LEFT CHANNEL
-        */
-
-        data[position + 0] =
-            (uint8_t)(
-                sample & 0xFF
-            );
-
-        data[position + 1] =
-            (uint8_t)(
-                (sample >> 8) & 0xFF
-            );
-
-        /*
-           RIGHT CHANNEL
-        */
-
-        data[position + 2] =
-            (uint8_t)(
-                sample & 0xFF
-            );
-
-        data[position + 3] =
-            (uint8_t)(
-                (sample >> 8) & 0xFF
-            );
-
-        /*
-           IMPORTANT:
-
-           Do not reset this phase inside
-           the callback.
-
-           It must continue across calls.
-        */
-
-        tars_tone_phase +=
-            phase_increment;
-
-        position += 4;
+        return len;
     }
 
-    /*
-       Return the full requested length.
+    size_t remaining =
+        (size_t)len;
 
-       Remaining bytes, if any, were already
-       filled with zero by memset().
-    */
+    size_t output_pos =
+        0;
+
+    while (
+        remaining > 0
+    ) {
+        size_t available =
+            TARS_TONE_BUFFER_SIZE -
+            tars_tone_read_pos;
+
+        size_t copy_len =
+            remaining;
+
+        if (
+            copy_len >
+            available
+        ) {
+            copy_len =
+                available;
+        }
+
+        memcpy(
+            data + output_pos,
+            tars_tone_buffer +
+            tars_tone_read_pos,
+            copy_len
+        );
+
+        output_pos +=
+            copy_len;
+
+        remaining -=
+            copy_len;
+
+        tars_tone_read_pos +=
+            copy_len;
+
+        if (
+            tars_tone_read_pos >=
+            TARS_TONE_BUFFER_SIZE
+        ) {
+            tars_tone_read_pos =
+                0;
+        }
+    }
 
     return len;
 }
@@ -322,8 +408,16 @@ static int32_t tars_generate_tone(
 /* =========================================================
    A2DP AUDIO DATA CALLBACK
 
-   REVISED:
-   Always provides a fully initialized buffer.
+   IMPORTANT:
+
+   This callback runs in the Bluetooth audio path.
+
+   Keep it lightweight:
+   - no printing
+   - no Python calls
+   - no allocation
+   - no Bluetooth control calls
+   - tone uses memcpy only
    ========================================================= */
 
 static int32_t tars_a2dp_data_callback(
@@ -345,7 +439,7 @@ static int32_t tars_a2dp_data_callback(
     if (
         tars_internal_tone
     ) {
-        return tars_generate_tone(
+        return tars_copy_tone(
             data,
             len
         );
@@ -362,21 +456,25 @@ static int32_t tars_a2dp_data_callback(
         );
 
     /*
-       Fill missing data with silence.
+       If PCM data is insufficient,
+       complete the requested buffer
+       with silence.
     */
 
     if (
-        received < (size_t)len
+        received <
+        (size_t)len
     ) {
         memset(
             data + received,
             0,
-            (size_t)len - received
+            (size_t)len -
+            received
         );
     }
 
     /*
-       Always return the requested length.
+       Always return requested length.
     */
 
     return len;
@@ -536,6 +634,9 @@ static void tars_a2dp_event_callback(
 
                     tars_internal_tone =
                         false;
+
+                    tars_tone_read_pos =
+                        0;
 
                     tars_pcm_clear();
 
@@ -842,7 +943,8 @@ static void tars_gap_callback(
 
             for (
                 int i = 0;
-                i < param->disc_res.num_prop;
+                i <
+                param->disc_res.num_prop;
                 i++
             ) {
                 esp_bt_gap_dev_prop_t *prop =
@@ -853,7 +955,8 @@ static void tars_gap_callback(
                     ESP_BT_GAP_DEV_PROP_EIR
                 ) {
                     eir =
-                        (uint8_t *)prop->val;
+                        (uint8_t *)
+                        prop->val;
                 }
             }
 
@@ -1115,6 +1218,12 @@ tars_a2dp_start(void)
     tars_pcm_clear();
 
     tars_internal_tone =
+        false;
+
+    tars_tone_read_pos =
+        0;
+
+    tars_tone_buffer_ready =
         false;
 
     tars_scanning =
@@ -1513,14 +1622,16 @@ tars_a2dp_tone(void)
         );
     }
 
+    /*
+       Prepare tone BEFORE streaming.
+
+       The audio callback will only copy this data.
+    */
+
+    tars_prepare_tone();
+
     tars_internal_tone =
         true;
-
-    tars_tone_phase =
-        0;
-
-    tars_tone_frequency =
-        440;
 
     if (
         tars_audio_started
@@ -1589,7 +1700,7 @@ tars_a2dp_tone_stop(void)
     tars_internal_tone =
         false;
 
-    tars_tone_phase =
+    tars_tone_read_pos =
         0;
 
     if (
@@ -1633,6 +1744,9 @@ tars_a2dp_stop(void)
 
     tars_internal_tone =
         false;
+
+    tars_tone_read_pos =
+        0;
 
     if (
         !tars_audio_started
@@ -1693,7 +1807,9 @@ tars_a2dp_write(
     if (
         !tars_a2dp_connected
     ) {
-        return mp_obj_new_int(0);
+        return mp_obj_new_int(
+            0
+        );
     }
 
     tars_internal_tone =
@@ -1730,13 +1846,17 @@ tars_a2dp_buffer(void)
         result,
         sizeof(result),
         "PCM BUFFER: %u / %u BYTES",
-        (unsigned int)pcm_used,
-        (unsigned int)PCM_BUFFER_SIZE
+        (unsigned int)
+        pcm_used,
+        (unsigned int)
+        PCM_BUFFER_SIZE
     );
 
     return mp_obj_new_str(
         result,
-        strlen(result)
+        strlen(
+            result
+        )
     );
 }
 
