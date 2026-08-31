@@ -44,7 +44,6 @@ jobs:
       - name: Setup MicroPython submodules
         run: |
           cd micropython
-
           git submodule update \
             --init \
             --recursive \
@@ -65,38 +64,51 @@ jobs:
             --recursive \
             --filter=tree:0
 
-      - name: Patch A2DP source queue for lower RAM use
+      - name: Patch A2DP source queue for balanced RAM use
         shell: bash
         run: |
           A2DP_FILE="$GITHUB_WORKSPACE/esp-idf/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_a2dp_source.c"
 
           echo "=================================================="
-          echo "A2DP SOURCE QUEUE PATCH"
+          echo "A2DP SOURCE QUEUE CHECK"
           echo "=================================================="
 
+          if [ ! -f "$A2DP_FILE" ]; then
+            echo "ERROR: A2DP SOURCE FILE NOT FOUND"
+            echo "$A2DP_FILE"
+            exit 1
+          fi
+
+          echo ""
           echo "BEFORE PATCH:"
           grep -n \
             -E "BTC_MEDIA_AA_BUF_SIZE|MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE"
+            "$A2DP_FILE" \
+            || true
+
+          echo ""
+          echo "PATCHING MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ TO 16..."
 
           sed -i \
-            's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (8)/' \
+            -E \
+            's/(#define[[:space:]]+MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ[[:space:]]+)\([0-9]+\)/\1(16)/' \
             "$A2DP_FILE"
 
           echo ""
           echo "AFTER PATCH:"
           grep -n \
             -E "BTC_MEDIA_AA_BUF_SIZE|MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE"
+            "$A2DP_FILE" \
+            || true
 
           echo ""
           echo "VERIFY PATCH RESULT:"
 
-          if grep -q \
-            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (8)" \
+          if grep -Eq \
+            '#define[[:space:]]+MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ[[:space:]]+\(16\)' \
             "$A2DP_FILE"; then
 
-            echo "PATCH SUCCESS"
+            echo "PATCH SUCCESS: QUEUE SIZE = 16"
           else
             echo "PATCH FAILED"
             exit 1
@@ -105,7 +117,6 @@ jobs:
       - name: Install ESP-IDF
         run: |
           cd esp-idf
-
           ./install.sh esp32
 
       - name: Build mpy-cross
@@ -189,6 +200,7 @@ jobs:
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
+
           rm -rf ports/esp32/build-TARS_ESP32_A2DP
 
           make -C ports/esp32 \
