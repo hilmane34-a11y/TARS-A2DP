@@ -89,7 +89,7 @@
    HTTP buffer kecil untuk menghemat heap.
 */
 
-#define TARS_HTTP_BUFFER_SIZE 524
+#define TARS_HTTP_BUFFER_SIZE 512
 
 
 /* =========================================================
@@ -2410,10 +2410,10 @@ tars_a2dp_tts(
         10000,
 
     .buffer_size =
-        524,
+    TARS_HTTP_BUFFER_SIZE,
 
     .buffer_size_tx =
-        524,
+    TARS_HTTP_BUFFER_SIZE,
 
     .crt_bundle_attach =
         esp_crt_bundle_attach
