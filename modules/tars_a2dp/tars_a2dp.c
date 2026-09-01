@@ -63,7 +63,7 @@
 
 #define TARS_TTS_SOURCE_RATE 24000
 
-#define TARS_TTS_MAX_BYTES (512 * 1024)
+#define TARS_TTS_MAX_BYTES (128 * 1024)
 
 
 /* =========================================================
@@ -71,15 +71,10 @@
    ========================================================= */
 
 static bool tars_bt_started = false;
-
 static bool tars_scanning = false;
-
 static bool tars_device_found = false;
-
 static bool tars_a2dp_connected = false;
-
 static bool tars_a2dp_connecting = false;
-
 static bool tars_audio_started = false;
 
 
@@ -88,11 +83,8 @@ static bool tars_audio_started = false;
    ========================================================= */
 
 static bool tars_media_check_pending = false;
-
 static bool tars_media_start_requested = false;
-
 static bool tars_media_start_pending = false;
-
 static bool tars_media_stop_pending = false;
 
 
@@ -108,9 +100,7 @@ static esp_bd_addr_t tars_target_bda = {0};
    ========================================================= */
 
 static bool tars_tone_enabled = false;
-
 static uint32_t tars_tone_phase = 0;
-
 static uint32_t tars_tone_frequency = 440;
 
 
@@ -119,19 +109,12 @@ static uint32_t tars_tone_frequency = 440;
    ========================================================= */
 
 static uint8_t *tars_tts_pcm = NULL;
-
 static size_t tars_tts_pcm_size = 0;
-
 static size_t tars_tts_pcm_capacity = 0;
-
 static volatile size_t tars_tts_read_pos = 0;
-
 static bool tars_tts_playing = false;
-
 static bool tars_tts_loading = false;
-
 static uint32_t tars_tts_resample_phase = 0;
-
 static const char *tars_tts_error = "";
 
 
@@ -205,7 +188,6 @@ tars_generate_tone(
                 0xFF
             );
 
-
         data[position + 1] =
             (uint8_t)(
                 (
@@ -215,13 +197,11 @@ tars_generate_tone(
                 0xFF
             );
 
-
         data[position + 2] =
             (uint8_t)(
                 sample &
                 0xFF
             );
-
 
         data[position + 3] =
             (uint8_t)(
@@ -298,7 +278,7 @@ tars_tts_http_event(
                     new_capacity == 0
                 ) {
                     new_capacity =
-                        32768;
+                        16384;
                 }
 
 
@@ -403,21 +383,13 @@ tars_json_escape(
 
 
     result[pos++] = '{';
-
     result[pos++] = '"';
-
     result[pos++] = 't';
-
     result[pos++] = 'e';
-
     result[pos++] = 'x';
-
     result[pos++] = 't';
-
     result[pos++] = '"';
-
     result[pos++] = ':';
-
     result[pos++] = '"';
 
 
@@ -543,10 +515,6 @@ tars_a2dp_data_callback(
         (len % 4);
 
 
-    /* =============================================
-       CLOUDFLARE TTS
-       ============================================= */
-
     if (
         tars_tts_playing &&
         tars_tts_pcm != NULL &&
@@ -588,9 +556,7 @@ tars_a2dp_data_callback(
                 memset(
                     data +
                     position,
-
                     0,
-
                     (size_t)(
                         usable_len -
                         position
@@ -625,16 +591,11 @@ tars_a2dp_data_callback(
                 );
 
 
-            /*
-               MONO -> STEREO
-            */
-
             data[position + 0] =
                 (uint8_t)(
                     sample &
                     0xFF
                 );
-
 
             data[position + 1] =
                 (uint8_t)(
@@ -645,13 +606,11 @@ tars_a2dp_data_callback(
                     0xFF
                 );
 
-
             data[position + 2] =
                 (uint8_t)(
                     sample &
                     0xFF
                 );
-
 
             data[position + 3] =
                 (uint8_t)(
@@ -666,12 +625,6 @@ tars_a2dp_data_callback(
             position +=
                 4;
 
-
-            /*
-               24000 Hz
-               ->
-               44100 Hz
-            */
 
             tars_tts_resample_phase +=
                 (
@@ -689,10 +642,6 @@ tars_a2dp_data_callback(
     }
 
 
-    /* =============================================
-       INTERNAL TONE
-       ============================================= */
-
     if (
         tars_tone_enabled
     ) {
@@ -702,10 +651,6 @@ tars_a2dp_data_callback(
         );
     }
 
-
-    /* =============================================
-       SILENCE
-       ============================================= */
 
     memset(
         data,
@@ -752,10 +697,8 @@ tars_request_audio_start(void)
     tars_media_start_requested =
         true;
 
-
     tars_media_check_pending =
         true;
-
 
     tars_status_text =
         "A2DP CHECKING SOURCE READY";
@@ -773,10 +716,8 @@ tars_request_audio_start(void)
         tars_media_check_pending =
             false;
 
-
         tars_media_start_requested =
             false;
-
 
         tars_status_text =
             "A2DP SOURCE CHECK FAILED";
@@ -818,7 +759,6 @@ tars_request_audio_stop(void)
     tars_media_stop_pending =
         true;
 
-
     tars_status_text =
         "A2DP AUDIO STOPPING";
 
@@ -834,7 +774,6 @@ tars_request_audio_stop(void)
     ) {
         tars_media_stop_pending =
             false;
-
 
         tars_status_text =
             "A2DP STOP FAILED";
@@ -865,43 +804,22 @@ tars_a2dp_event_callback(
     switch (
         event
     ) {
-
-
         case ESP_A2D_CONNECTION_STATE_EVT:
         {
             switch (
                 param->conn_stat.state
             ) {
-
-
                 case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
                 {
-                    tars_a2dp_connected =
-                        false;
-
-                    tars_a2dp_connecting =
-                        false;
-
-                    tars_audio_started =
-                        false;
-
-                    tars_tone_enabled =
-                        false;
-
-                    tars_tts_playing =
-                        false;
-
-                    tars_media_check_pending =
-                        false;
-
-                    tars_media_start_requested =
-                        false;
-
-                    tars_media_start_pending =
-                        false;
-
-                    tars_media_stop_pending =
-                        false;
+                    tars_a2dp_connected = false;
+                    tars_a2dp_connecting = false;
+                    tars_audio_started = false;
+                    tars_tone_enabled = false;
+                    tars_tts_playing = false;
+                    tars_media_check_pending = false;
+                    tars_media_start_requested = false;
+                    tars_media_start_pending = false;
+                    tars_media_stop_pending = false;
 
                     tars_status_text =
                         "A2DP DISCONNECTED";
@@ -912,14 +830,9 @@ tars_a2dp_event_callback(
 
                 case ESP_A2D_CONNECTION_STATE_CONNECTING:
                 {
-                    tars_a2dp_connected =
-                        false;
-
-                    tars_a2dp_connecting =
-                        true;
-
-                    tars_audio_started =
-                        false;
+                    tars_a2dp_connected = false;
+                    tars_a2dp_connecting = true;
+                    tars_audio_started = false;
 
                     tars_status_text =
                         "A2DP CONNECTING";
@@ -930,26 +843,13 @@ tars_a2dp_event_callback(
 
                 case ESP_A2D_CONNECTION_STATE_CONNECTED:
                 {
-                    tars_a2dp_connected =
-                        true;
-
-                    tars_a2dp_connecting =
-                        false;
-
-                    tars_audio_started =
-                        false;
-
-                    tars_media_check_pending =
-                        false;
-
-                    tars_media_start_requested =
-                        false;
-
-                    tars_media_start_pending =
-                        false;
-
-                    tars_media_stop_pending =
-                        false;
+                    tars_a2dp_connected = true;
+                    tars_a2dp_connecting = false;
+                    tars_audio_started = false;
+                    tars_media_check_pending = false;
+                    tars_media_start_requested = false;
+                    tars_media_start_pending = false;
+                    tars_media_stop_pending = false;
 
                     tars_status_text =
                         "A2DP CONNECTED";
@@ -960,17 +860,10 @@ tars_a2dp_event_callback(
 
                 case ESP_A2D_CONNECTION_STATE_DISCONNECTING:
                 {
-                    tars_a2dp_connected =
-                        false;
-
-                    tars_a2dp_connecting =
-                        false;
-
-                    tars_audio_started =
-                        false;
-
-                    tars_tts_playing =
-                        false;
+                    tars_a2dp_connected = false;
+                    tars_a2dp_connecting = false;
+                    tars_audio_started = false;
+                    tars_tts_playing = false;
 
                     tars_status_text =
                         "A2DP DISCONNECTING";
@@ -992,24 +885,13 @@ tars_a2dp_event_callback(
             switch (
                 param->audio_stat.state
             ) {
-
-
                 case ESP_A2D_AUDIO_STATE_STARTED:
                 {
-                    tars_audio_started =
-                        true;
-
-                    tars_media_check_pending =
-                        false;
-
-                    tars_media_start_requested =
-                        false;
-
-                    tars_media_start_pending =
-                        false;
-
-                    tars_media_stop_pending =
-                        false;
+                    tars_audio_started = true;
+                    tars_media_check_pending = false;
+                    tars_media_start_requested = false;
+                    tars_media_start_pending = false;
+                    tars_media_stop_pending = false;
 
 
                     if (
@@ -1037,20 +919,11 @@ tars_a2dp_event_callback(
 
                 case ESP_A2D_AUDIO_STATE_STOPPED:
                 {
-                    tars_audio_started =
-                        false;
-
-                    tars_media_check_pending =
-                        false;
-
-                    tars_media_start_requested =
-                        false;
-
-                    tars_media_start_pending =
-                        false;
-
-                    tars_media_stop_pending =
-                        false;
+                    tars_audio_started = false;
+                    tars_media_check_pending = false;
+                    tars_media_start_requested = false;
+                    tars_media_start_pending = false;
+                    tars_media_stop_pending = false;
 
 
                     if (
@@ -1079,8 +952,6 @@ tars_a2dp_event_callback(
 
         case ESP_A2D_MEDIA_CTRL_ACK_EVT:
         {
-
-
             if (
                 param->media_ctrl_stat.cmd ==
                 ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY
@@ -1100,7 +971,6 @@ tars_a2dp_event_callback(
                     ) {
                         tars_media_start_pending =
                             true;
-
 
                         tars_status_text =
                             "A2DP AUDIO STARTING";
@@ -1219,8 +1089,6 @@ tars_gap_callback(
     switch (
         event
     ) {
-
-
         case ESP_BT_GAP_DISC_RES_EVT:
         {
             if (
@@ -1555,50 +1423,21 @@ tars_a2dp_start(void)
     }
 
 
-    tars_scanning =
-        false;
-
-    tars_device_found =
-        false;
-
-    tars_a2dp_connected =
-        false;
-
-    tars_a2dp_connecting =
-        false;
-
-    tars_audio_started =
-        false;
-
-    tars_media_check_pending =
-        false;
-
-    tars_media_start_requested =
-        false;
-
-    tars_media_start_pending =
-        false;
-
-    tars_media_stop_pending =
-        false;
-
-    tars_tone_enabled =
-        false;
-
-    tars_tts_playing =
-        false;
-
-    tars_tts_loading =
-        false;
-
-    tars_tone_phase =
-        0;
-
-    tars_tts_resample_phase =
-        0;
-
-    tars_tone_frequency =
-        440;
+    tars_scanning = false;
+    tars_device_found = false;
+    tars_a2dp_connected = false;
+    tars_a2dp_connecting = false;
+    tars_audio_started = false;
+    tars_media_check_pending = false;
+    tars_media_start_requested = false;
+    tars_media_start_pending = false;
+    tars_media_stop_pending = false;
+    tars_tone_enabled = false;
+    tars_tts_playing = false;
+    tars_tts_loading = false;
+    tars_tone_phase = 0;
+    tars_tts_resample_phase = 0;
+    tars_tone_frequency = 440;
 
     tars_bt_started =
         true;
@@ -1923,7 +1762,6 @@ tars_a2dp_play(void)
     tars_tts_playing =
         false;
 
-
     tars_tone_enabled =
         true;
 
@@ -2004,10 +1842,6 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 /* =========================================================
    CLOUDFLARE TTS
-
-   MicroPython:
-
-   tars_a2dp.tts("Halo saya TARS")
    ========================================================= */
 
 static mp_obj_t
@@ -2086,7 +1920,6 @@ tars_a2dp_tts(
     tars_tone_enabled =
         false;
 
-
     tars_tts_playing =
         false;
 
@@ -2139,28 +1972,28 @@ tars_a2dp_tts(
 
 
     esp_http_client_config_t config =
-{
-    .url =
-        TARS_CLOUD_TTS_URL,
+    {
+        .url =
+            TARS_CLOUD_TTS_URL,
 
-    .method =
-        HTTP_METHOD_POST,
+        .method =
+            HTTP_METHOD_POST,
 
-    .event_handler =
-        tars_tts_http_event,
+        .event_handler =
+            tars_tts_http_event,
 
-    .timeout_ms =
-        30000,
+        .timeout_ms =
+            30000,
 
-    .buffer_size =
-        4096,
+        .buffer_size =
+            4096,
 
-    .buffer_size_tx =
-        4096,
+        .buffer_size_tx =
+            4096,
 
-    .crt_bundle_attach =
-        esp_crt_bundle_attach
-};
+        .crt_bundle_attach =
+            esp_crt_bundle_attach
+    };
 
 
     esp_http_client_handle_t client =
@@ -2690,7 +2523,7 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 
 /* =========================================================
-   MICROPYTHON MODULE
+   MEMORY STATUS
    ========================================================= */
 
 static mp_obj_t
@@ -2734,6 +2567,10 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_memory
 );
 
+
+/* =========================================================
+   MICROPYTHON MODULE
+   ========================================================= */
 
 static const mp_rom_map_elem_t
 tars_a2dp_globals_table[] =
@@ -2888,6 +2725,17 @@ tars_a2dp_globals_table[] =
 
         MP_ROM_PTR(
             &tars_a2dp_status_obj
+        )
+    },
+
+
+    {
+        MP_ROM_QSTR(
+            MP_QSTR_memory
+        ),
+
+        MP_ROM_PTR(
+            &tars_a2dp_memory_obj
         )
     }
 };
