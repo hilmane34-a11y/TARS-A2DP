@@ -65,7 +65,7 @@
    tetapi menjadi buffer streaming.
 */
 
-#define PCM_BUFFER_SIZE 16384
+#define PCM_BUFFER_SIZE 8000
 
 #define TARS_SAMPLE_RATE 44100
 #define TARS_CHANNELS 2
