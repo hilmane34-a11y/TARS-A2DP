@@ -633,11 +633,59 @@ static int32_t tars_a2dp_data_callback(
     }
 
     /*
-       Jika audio belum aktif.
+       Jika audio belum aktif,
+       jangan menghasilkan data audio.
     */
 
     if (
         !tars_audio_started
+    ) {
+        return 0;
+    }
+
+    /*
+       INTERNAL TONE
+
+       Tone tetap menghasilkan audio penuh.
+       Bagian ini dipertahankan karena
+       sebelumnya sudah terbukti stabil.
+    */
+
+    if (
+        tars_internal_tone
+    ) {
+        return tars_generate_tone(
+            data,
+            len
+        );
+    }
+
+    /*
+       PCM STREAM
+
+       Ambil hanya data PCM yang benar-benar
+       tersedia di ring buffer.
+
+       Jangan terus mengisi silence setelah
+       seluruh PCM habis.
+    */
+
+    size_t received =
+        tars_pcm_read(
+            data,
+            (size_t)len
+        );
+
+    /*
+       Jika buffer kosong,
+       beri silence untuk callback ini.
+
+       Tetap return panjang yang diminta
+       agar format callback A2DP tetap valid.
+    */
+
+    if (
+        received == 0
     ) {
         memset(
             data,
@@ -649,52 +697,8 @@ static int32_t tars_a2dp_data_callback(
     }
 
     /*
-       INTERNAL TONE
-    */
-
-    if (
-        tars_internal_tone
-    ) {
-        int32_t generated =
-            tars_generate_tone(
-                data,
-                len
-            );
-
-        if (
-            generated < len
-        ) {
-            memset(
-                data + generated,
-                0,
-                (size_t)(
-                    len - generated
-                )
-            );
-        }
-
-        return len;
-    }
-
-    /*
-       PCM STREAM
-    */
-
-    size_t received =
-        tars_pcm_read(
-            data,
-            (size_t)len
-        );
-
-    /*
-       Buffer kosong atau
-       data kurang.
-
-       Sisa diisi silence.
-
-       Stream tetap berjalan sehingga
-       Python dapat menambahkan data
-       berikutnya dengan write().
+       Jika data kurang dari ukuran request,
+       isi sisa dengan silence.
     */
 
     if (
