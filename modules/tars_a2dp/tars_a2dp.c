@@ -72,7 +72,7 @@
    request akan dihentikan agar ESP32 tidak kehabisan RAM.
 */
 
-#define TARS_TTS_MAX_TEXT_LENGTH 80
+#define TARS_TTS_MAX_TEXT_LENGTH 30
 
 
 /*
@@ -82,14 +82,14 @@
    Bluetooth + WiFi aktif bersamaan.
 */
 
-#define TARS_TTS_MAX_BYTES (16 * 1024)
+#define TARS_TTS_MAX_BYTES (8 * 1024)
 
 
 /*
    HTTP buffer kecil untuk menghemat heap.
 */
 
-#define TARS_HTTP_BUFFER_SIZE 1024
+#define TARS_HTTP_BUFFER_SIZE 524
 
 
 /* =========================================================
@@ -2328,9 +2328,9 @@ tars_a2dp_tts(
         TARS_TTS_MAX_TEXT_LENGTH
     ) {
         return mp_obj_new_str(
-            "ERROR: TTS TEXT TOO LONG (MAX 80)",
+            "ERROR: TTS TEXT TOO LONG (MAX 30)",
             strlen(
-                "ERROR: TTS TEXT TOO LONG (MAX 80)"
+                "ERROR: TTS TEXT TOO LONG (MAX 30)"
             )
         );
     }
@@ -2407,13 +2407,13 @@ tars_a2dp_tts(
         tars_tts_http_event,
 
     .timeout_ms =
-        30000,
+        10000,
 
     .buffer_size =
-        1024,
+        524,
 
     .buffer_size_tx =
-        1024,
+        524,
 
     .crt_bundle_attach =
         esp_crt_bundle_attach
