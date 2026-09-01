@@ -2396,28 +2396,28 @@ tars_a2dp_tts(
 
 
     esp_http_client_config_t config =
-    {
-        .url =
-            TARS_CLOUD_TTS_URL,
+{
+    .url =
+        TARS_CLOUD_TTS_URL,
 
-        .method =
-            HTTP_METHOD_POST,
+    .method =
+        HTTP_METHOD_POST,
 
-        .event_handler =
-            tars_tts_http_event,
+    .event_handler =
+        tars_tts_http_event,
 
-        .timeout_ms =
-            30000,
+    .timeout_ms =
+        30000,
 
-        .buffer_size =
-            TARS_HTTP_BUFFER_SIZE,
+    .buffer_size =
+        1024,
 
-        .buffer_size_tx =
-            512,
+    .buffer_size_tx =
+        1024,
 
-        .crt_bundle_attach =
-            esp_crt_bundle_attach
-    };
+    .crt_bundle_attach =
+        esp_crt_bundle_attach
+};
 
 
     esp_http_client_handle_t client =
