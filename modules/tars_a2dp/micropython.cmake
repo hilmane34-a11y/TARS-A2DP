@@ -11,6 +11,8 @@ target_include_directories(usermod_tars_a2dp INTERFACE
 target_link_libraries(usermod_tars_a2dp INTERFACE
     __idf_bt
     __idf_esp_http_client
+    __idf_esp_tls
+    __idf_esp_transport
 )
 
 target_link_libraries(usermod INTERFACE
