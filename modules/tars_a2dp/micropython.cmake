@@ -12,7 +12,8 @@ target_link_libraries(usermod_tars_a2dp INTERFACE
     __idf_bt
     __idf_esp_http_client
     __idf_esp_tls
-    __idf_esp_transport
+    __idf_tcp_transport
+    __idf_mbedtls
 )
 
 target_link_libraries(usermod INTERFACE
