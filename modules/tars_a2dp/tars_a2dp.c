@@ -397,46 +397,72 @@ static size_t tars_pcm_write_tts(
         return 0;
     }
 
-    size_t input_samples =
-        len / 2;
+    size_t input_samples = len / 2;
 
-    size_t input_index = 0;
+    /*
+       Posisi input dalam satuan:
 
-    uint32_t accumulator = 0;
+       1 / 44100 sample output
 
-    size_t consumed_bytes = 0;
+       Kita menggunakan integer agar ringan
+       dan aman untuk ESP32.
+    */
+
+    uint32_t phase = 0;
+
+    size_t output_count = 0;
+
+    /*
+       Maksimum output yang dapat dibuat
+       berdasarkan ruang buffer.
+
+       1 sample stereo = 4 byte.
+    */
+
+    size_t max_output_samples =
+        tars_pcm_free() / 4;
+
+    /*
+       Rasio:
+
+       Input  = 24000 Hz
+       Output = 44100 Hz
+
+       Untuk setiap sample output,
+       phase maju 24000.
+
+       Index input:
+       phase / 44100
+    */
 
     while (
-        input_index < input_samples
+        output_count < max_output_samples
     ) {
-        /*
-           Pastikan ruang minimal
-           untuk satu sample stereo.
-        */
+        size_t input_index =
+            phase / TARS_SAMPLE_RATE;
 
         if (
-            tars_pcm_free() < 4
+            input_index >= input_samples
         ) {
             break;
         }
 
+        size_t byte_index =
+            input_index * 2;
+
         int16_t sample =
             (int16_t)(
                 (uint16_t)data[
-                    input_index * 2
+                    byte_index
                 ]
                 |
                 (
                     (uint16_t)data[
-                        input_index * 2 + 1
+                        byte_index + 1
                     ]
                     << 8
                 )
             );
-
-        /*
-           Output sample stereo.
-        */
 
         if (
             !tars_pcm_write_stereo_sample(
@@ -447,49 +473,39 @@ static size_t tars_pcm_write_tts(
         }
 
         /*
-           Resampling ratio:
-
-           output = 44100
-           input  = 24000
-
-           accumulator menentukan
-           kapan input berpindah.
+           Bergerak maju dalam domain
+           input sample rate.
         */
 
-        accumulator +=
-            TTS_SAMPLE_RATE;
+        phase += TTS_SAMPLE_RATE;
 
-        while (
-            accumulator >=
-            TARS_SAMPLE_RATE
-        ) {
-            accumulator -=
-                TARS_SAMPLE_RATE;
-
-            input_index++;
-        }
-
-        /*
-           Jika belum mencapai
-           perpindahan input,
-           sample yang sama
-           akan digunakan lagi.
-        */
-
-        if (
-            input_index >=
-            input_samples
-        ) {
-            break;
-        }
-
-        consumed_bytes =
-            input_index * 2;
+        output_count++;
     }
 
     /*
-       Jangan mengembalikan
-       lebih besar dari input.
+       Hitung berapa byte input
+       yang sudah benar-benar digunakan.
+
+       Jika seluruh input selesai,
+       kembalikan seluruh len genap.
+    */
+
+    size_t consumed_samples =
+        phase / TARS_SAMPLE_RATE;
+
+    if (
+        consumed_samples >
+        input_samples
+    ) {
+        consumed_samples =
+            input_samples;
+    }
+
+    size_t consumed_bytes =
+        consumed_samples * 2;
+
+    /*
+       Jangan pernah melebihi len.
     */
 
     if (
