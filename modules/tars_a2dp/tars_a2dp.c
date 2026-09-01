@@ -488,10 +488,126 @@ static size_t tars_pcm_write_tts(
 
        Jika seluruh input selesai,
        kembalikan seluruh len genap.
+static size_t tars_pcm_write_tts(
+    const uint8_t *data,
+    size_t len
+)
+{
+    if (
+        data == NULL ||
+        len < 2
+    ) {
+        return 0;
+    }
+
+    size_t input_samples =
+        len / 2;
+
+    /*
+       Hitung kapasitas output yang tersedia.
+
+       1 sample output stereo
+       = 4 byte.
+    */
+
+    size_t free_bytes =
+        tars_pcm_free();
+
+    size_t max_output_samples =
+        free_bytes / 4;
+
+    if (
+        max_output_samples == 0
+    ) {
+        return 0;
+    }
+
+    /*
+       Nearest-neighbor resampling.
+
+       Posisi input menggunakan fixed-point
+       sederhana:
+
+       input_position / 44100
+
+       Bertambah 24000 setiap output sample.
+    */
+
+    uint32_t phase = 0;
+
+    size_t output_count = 0;
+
+    while (
+        output_count < max_output_samples
+    ) {
+        size_t input_index =
+            phase / TARS_SAMPLE_RATE;
+
+        if (
+            input_index >= input_samples
+        ) {
+            break;
+        }
+
+        size_t byte_index =
+            input_index * 2;
+
+        int16_t sample =
+            (int16_t)(
+                (uint16_t)data[
+                    byte_index
+                ]
+                |
+                (
+                    (uint16_t)data[
+                        byte_index + 1
+                    ]
+                    << 8
+                )
+            );
+
+        if (
+            !tars_pcm_write_stereo_sample(
+                sample
+            )
+        ) {
+            break;
+        }
+
+        phase +=
+            TTS_SAMPLE_RATE;
+
+        output_count++;
+    }
+
+    /*
+       Jika tidak ada output yang berhasil
+       dibuat, jangan klaim input berhasil
+       digunakan.
+    */
+
+    if (
+        output_count == 0
+    ) {
+        return 0;
+    }
+
+    /*
+       Hitung jumlah input yang benar-benar
+       telah dipakai oleh resampler.
+
+       Gunakan pembulatan ke atas agar
+       pemanggil tidak mengirim ulang
+       sample yang sama terus-menerus.
     */
 
     size_t consumed_samples =
-        phase / TARS_SAMPLE_RATE;
+        (
+            phase +
+            TARS_SAMPLE_RATE - 1
+        )
+        /
+        TARS_SAMPLE_RATE;
 
     if (
         consumed_samples >
@@ -505,8 +621,12 @@ static size_t tars_pcm_write_tts(
         consumed_samples * 2;
 
     /*
-       Jangan pernah melebihi len.
+       Pastikan tetap genap karena
+       PCM S16LE = 2 byte per sample.
     */
+
+    consumed_bytes &=
+        ~(size_t)1;
 
     if (
         consumed_bytes > len
