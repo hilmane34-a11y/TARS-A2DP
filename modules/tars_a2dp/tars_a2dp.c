@@ -12,6 +12,7 @@
 #include "esp_gap_bt_api.h"
 #include "esp_a2dp_api.h"
 #include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 
 
