@@ -1815,7 +1815,7 @@ tars_a2dp_play(void)
     */
 
     if (
-        tars_pcm_used() < 1024
+        tars_pcm_used() < 4
     ) {
         return mp_obj_new_str(
             "ERROR: WRITE PCM FIRST",
