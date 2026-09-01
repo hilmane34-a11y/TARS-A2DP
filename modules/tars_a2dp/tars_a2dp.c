@@ -2693,6 +2693,48 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
    MICROPYTHON MODULE
    ========================================================= */
 
+static mp_obj_t
+tars_a2dp_memory(void)
+{
+    size_t free_8bit =
+        heap_caps_get_free_size(
+            MALLOC_CAP_8BIT
+        );
+
+    size_t largest_8bit =
+        heap_caps_get_largest_free_block(
+            MALLOC_CAP_8BIT
+        );
+
+    size_t minimum_8bit =
+        heap_caps_get_minimum_free_size(
+            MALLOC_CAP_8BIT
+        );
+
+    char result[160];
+
+    snprintf(
+        result,
+        sizeof(result),
+        "HEAP FREE: %u BYTES | LARGEST BLOCK: %u BYTES | MIN FREE: %u BYTES",
+        (unsigned int)free_8bit,
+        (unsigned int)largest_8bit,
+        (unsigned int)minimum_8bit
+    );
+
+    return mp_obj_new_str(
+        result,
+        strlen(result)
+    );
+}
+
+
+static MP_DEFINE_CONST_FUN_OBJ_0(
+    tars_a2dp_memory_obj,
+    tars_a2dp_memory
+);
+
+
 static const mp_rom_map_elem_t
 tars_a2dp_globals_table[] =
 {
