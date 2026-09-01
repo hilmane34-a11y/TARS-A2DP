@@ -397,105 +397,15 @@ static size_t tars_pcm_write_tts(
         return 0;
     }
 
-    size_t input_samples = len / 2;
-
     /*
-       Posisi input dalam satuan:
-
-       1 / 44100 sample output
-
-       Kita menggunakan integer agar ringan
-       dan aman untuk ESP32.
+       Pastikan input selalu berupa
+       sample PCM 16-bit lengkap.
     */
 
-    uint32_t phase = 0;
+    len &= ~(size_t)1;
 
-    size_t output_count = 0;
-
-    /*
-       Maksimum output yang dapat dibuat
-       berdasarkan ruang buffer.
-
-       1 sample stereo = 4 byte.
-    */
-
-    size_t max_output_samples =
-        tars_pcm_free() / 4;
-
-    /*
-       Rasio:
-
-       Input  = 24000 Hz
-       Output = 44100 Hz
-
-       Untuk setiap sample output,
-       phase maju 24000.
-
-       Index input:
-       phase / 44100
-    */
-
-    while (
-        output_count < max_output_samples
-    ) {
-        size_t input_index =
-            phase / TARS_SAMPLE_RATE;
-
-        if (
-            input_index >= input_samples
-        ) {
-            break;
-        }
-
-        size_t byte_index =
-            input_index * 2;
-
-        int16_t sample =
-            (int16_t)(
-                (uint16_t)data[
-                    byte_index
-                ]
-                |
-                (
-                    (uint16_t)data[
-                        byte_index + 1
-                    ]
-                    << 8
-                )
-            );
-
-        if (
-            !tars_pcm_write_stereo_sample(
-                sample
-            )
-        ) {
-            break;
-        }
-
-        /*
-           Bergerak maju dalam domain
-           input sample rate.
-        */
-
-        phase += TTS_SAMPLE_RATE;
-
-        output_count++;
-    }
-
-    /*
-       Hitung berapa byte input
-       yang sudah benar-benar digunakan.
-
-       Jika seluruh input selesai,
-       kembalikan seluruh len genap.
-static size_t tars_pcm_write_tts(
-    const uint8_t *data,
-    size_t len
-)
-{
     if (
-        data == NULL ||
-        len < 2
+        len == 0
     ) {
         return 0;
     }
@@ -504,10 +414,14 @@ static size_t tars_pcm_write_tts(
         len / 2;
 
     /*
-       Hitung kapasitas output yang tersedia.
+       Kapasitas output yang tersedia.
 
-       1 sample output stereo
-       = 4 byte.
+       Output:
+       44100 Hz
+       Stereo
+       16-bit
+
+       1 sample frame = 4 byte.
     */
 
     size_t free_bytes =
@@ -523,28 +437,31 @@ static size_t tars_pcm_write_tts(
     }
 
     /*
-       Nearest-neighbor resampling.
+       Resampling:
+       24000 Hz -> 44100 Hz
 
-       Posisi input menggunakan fixed-point
-       sederhana:
+       phase berada dalam domain:
 
-       input_position / 44100
-
-       Bertambah 24000 setiap output sample.
+       input_rate / output_rate
     */
 
-    uint32_t phase = 0;
+    uint64_t phase = 0;
 
     size_t output_count = 0;
 
     while (
-        output_count < max_output_samples
+        output_count <
+        max_output_samples
     ) {
         size_t input_index =
-            phase / TARS_SAMPLE_RATE;
+            (size_t)(
+                phase /
+                TARS_SAMPLE_RATE
+            );
 
         if (
-            input_index >= input_samples
+            input_index >=
+            input_samples
         ) {
             break;
         }
@@ -554,14 +471,12 @@ static size_t tars_pcm_write_tts(
 
         int16_t sample =
             (int16_t)(
-                (uint16_t)data[
-                    byte_index
-                ]
+                (uint16_t)
+                data[byte_index]
                 |
                 (
-                    (uint16_t)data[
-                        byte_index + 1
-                    ]
+                    (uint16_t)
+                    data[byte_index + 1]
                     << 8
                 )
             );
@@ -574,17 +489,16 @@ static size_t tars_pcm_write_tts(
             break;
         }
 
+        /*
+           Maju sebesar 24000
+           untuk setiap sample output.
+        */
+
         phase +=
             TTS_SAMPLE_RATE;
 
         output_count++;
     }
-
-    /*
-       Jika tidak ada output yang berhasil
-       dibuat, jangan klaim input berhasil
-       digunakan.
-    */
 
     if (
         output_count == 0
@@ -593,21 +507,20 @@ static size_t tars_pcm_write_tts(
     }
 
     /*
-       Hitung jumlah input yang benar-benar
-       telah dipakai oleh resampler.
-
-       Gunakan pembulatan ke atas agar
-       pemanggil tidak mengirim ulang
-       sample yang sama terus-menerus.
+       Hitung jumlah sample input
+       yang telah benar-benar
+       dijangkau.
     */
 
     size_t consumed_samples =
-        (
-            phase +
-            TARS_SAMPLE_RATE - 1
-        )
-        /
-        TARS_SAMPLE_RATE;
+        (size_t)(
+            (
+                phase +
+                TARS_SAMPLE_RATE - 1
+            )
+            /
+            TARS_SAMPLE_RATE
+        );
 
     if (
         consumed_samples >
@@ -620,18 +533,12 @@ static size_t tars_pcm_write_tts(
     size_t consumed_bytes =
         consumed_samples * 2;
 
-    /*
-       Pastikan tetap genap karena
-       PCM S16LE = 2 byte per sample.
-    */
-
-    consumed_bytes &=
-        ~(size_t)1;
-
     if (
-        consumed_bytes > len
+        consumed_bytes >
+        len
     ) {
-        consumed_bytes = len;
+        consumed_bytes =
+            len;
     }
 
     return consumed_bytes;
