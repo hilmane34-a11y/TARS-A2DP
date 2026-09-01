@@ -22,27 +22,65 @@
 /* =========================================================
    TARS V1 MANZ
 
-   ESP32 + MICROPYTHON
+   ESP32 + MICROPYTHON USER C MODULE
    BLUETOOTH CLASSIC A2DP SOURCE
    CLOUDFLARE TTS
 
-   ARSITEKTUR MEMORY:
+   =========================================================
 
-   WIFI + HTTPS
-        ↓
+   ARSITEKTUR UTAMA
+
+   MODE DOWNLOAD:
+
+   WiFi + HTTPS
+          ↓
    BUFFER RAM KECIL
-        ↓
+          ↓
    FLASH PARTITION "ttsdata"
-        ↓
-   DOWNLOAD SELESAI
-        ↓
+
+
+   MODE PLAY:
+
    BLUETOOTH A2DP
-        ↓
-   BACA AUDIO DARI FLASH
-        ↓
+          ↓
+   BACA AUDIO SEDIKIT DEMI SEDIKIT
+   DARI FLASH
+          ↓
    I7-TWS
 
-   AUDIO TIDAK DISIMPAN PENUH DI RAM
+
+   AUDIO TIDAK DISIMPAN PENUH DI RAM.
+
+   HTTPS DOWNLOAD TIDAK BOLEH
+   SAAT BLUETOOTH SUDAH AKTIF.
+
+
+   URUTAN PEMAKAIAN:
+
+   1.
+   tars_a2dp.tts_download("Halo")
+
+   2.
+   tars_a2dp.start()
+
+   3.
+   tars_a2dp.scan()
+
+   4.
+   tars_a2dp.found()
+
+   5.
+   tars_a2dp.connect()
+
+   6.
+   tars_a2dp.tts_play()
+
+   7.
+   tars_a2dp.bluetooth_stop()
+
+   8.
+   BOLEH DOWNLOAD TTS LAGI
+
    ========================================================= */
 
 
@@ -50,13 +88,34 @@
    SETTINGS
    ========================================================= */
 
-#define TARS_DEVICE_NAME "TARS V1 MANZ"
+#define TARS_DEVICE_NAME \
+    "TARS V1 MANZ"
 
-#define TARS_TARGET_NAME "I7-TWS"
 
-#define TARS_SAMPLE_RATE 44100
+#define TARS_TARGET_NAME \
+    "I7-TWS"
 
-#define TARS_TTS_SOURCE_RATE 24000
+
+/*
+   OUTPUT A2DP
+
+   44.1 kHz
+*/
+
+#define TARS_SAMPLE_RATE \
+    44100
+
+
+/*
+   SAMPLE RATE
+   AUDIO DARI CLOUD TTS
+
+   HARUS SESUAI
+   DENGAN FORMAT SERVER TTS
+*/
+
+#define TARS_TTS_SOURCE_RATE \
+    24000
 
 
 #define TARS_CLOUD_TTS_URL \
@@ -64,49 +123,91 @@
 
 
 /*
-   TARS HANYA MENGGUNAKAN KALIMAT PENDEK
+   TARS MENGGUNAKAN
+   KALIMAT PENDEK
 */
 
-#define TARS_TTS_MAX_TEXT_LENGTH 30
+#define TARS_TTS_MAX_TEXT_LENGTH \
+    30
 
 
 /*
    BUFFER HTTP KECIL
 
-   HANYA BUFFER KERJA
-   BUKAN PENYIMPAN AUDIO
+   HANYA BUFFER KERJA.
+   BUKAN PENYIMPAN
+   SELURUH AUDIO.
 */
 
-#define TARS_HTTP_BUFFER_SIZE 512
+#define TARS_HTTP_BUFFER_SIZE \
+    512
 
 
 /*
    BUFFER BACA FLASH
 
-   HANYA MEMAKAI RAM KECIL
+   HANYA 512 BYTE RAM.
 */
 
-#define TARS_FLASH_READ_BUFFER_SIZE 512
+#define TARS_FLASH_READ_BUFFER_SIZE \
+    512
 
 
 /*
-   NAMA PARTISI FLASH KHUSUS AUDIO
+   NAMA PARTISI
+   KHUSUS AUDIO TTS
 
-   PARTITION TABLE HARUS MEMILIKI:
+   partitions.csv
+   HARUS MEMILIKI:
 
    ttsdata,data,0x40,...
 */
 
-#define TARS_TTS_PARTITION_NAME "ttsdata"
+#define TARS_TTS_PARTITION_NAME \
+    "ttsdata"
+
+
+/* =========================================================
+   MODE STATE
+   ========================================================= */
+
+
+/*
+   TRUE
+
+   SAAT BLUETOOTH
+   SUDAH DI-INISIALISASI
+*/
+
+static bool
+tars_bt_started = false;
+
+
+/*
+   TRUE
+
+   SAAT BLUETOOTH
+   SEDANG DIMATIKAN
+*/
+
+static bool
+tars_bt_stopping = false;
+
+
+/*
+   TRUE
+
+   SAAT DOWNLOAD HTTPS
+   SEDANG BERLANGSUNG
+*/
+
+static volatile bool
+tars_tts_loading = false;
 
 
 /* =========================================================
    BLUETOOTH STATE
    ========================================================= */
-
-static bool
-tars_bt_started = false;
-
 
 static bool
 tars_scanning = false;
@@ -178,7 +279,8 @@ tars_tone_frequency = 440;
 
 
 /*
-   PARTISI AUDIO
+   PARTISI FLASH
+   KHUSUS TTS
 */
 
 static const esp_partition_t *
@@ -186,8 +288,9 @@ tars_tts_partition = NULL;
 
 
 /*
-   UKURAN AUDIO YANG BERHASIL
-   DIDOWNLOAD KE FLASH
+   UKURAN AUDIO
+   YANG BERHASIL
+   DIDOWNLOAD
 */
 
 static size_t
@@ -195,7 +298,8 @@ tars_tts_flash_size = 0;
 
 
 /*
-   POSISI BACA AUDIO
+   POSISI AUDIO
+   YANG SEDANG DIBACA
 */
 
 static volatile size_t
@@ -203,7 +307,10 @@ tars_tts_read_pos = 0;
 
 
 /*
-   TTS SEDANG DIPUTAR
+   TRUE
+
+   SAAT AUDIO TTS
+   SEDANG DIPUTAR
 */
 
 static volatile bool
@@ -211,16 +318,10 @@ tars_tts_playing = false;
 
 
 /*
-   TTS SEDANG DOWNLOAD
-*/
+   TRUE
 
-static volatile bool
-tars_tts_loading = false;
-
-
-/*
-   AUDIO SUDAH TERSEDIA
-   DI FLASH
+   SAAT AUDIO VALID
+   SUDAH ADA DI FLASH
 */
 
 static bool
@@ -228,7 +329,9 @@ tars_tts_ready = false;
 
 
 /*
-   RESAMPLING
+   POSISI RESAMPLING
+
+   32.32 FIXED POINT
 */
 
 static uint64_t
@@ -236,10 +339,9 @@ tars_tts_resample_phase = 0;
 
 
 /*
-   BUFFER KECIL UNTUK
-   MEMBACA FLASH
+   BUFFER KECIL
 
-   512 BYTE SAJA
+   HANYA 512 BYTE
 */
 
 static uint8_t
@@ -249,8 +351,8 @@ tars_flash_read_buffer[
 
 
 /*
-   POSISI AWAL DATA
-   DALAM BUFFER
+   POSISI AWAL
+   BUFFER FLASH
 */
 
 static size_t
@@ -258,7 +360,7 @@ tars_flash_buffer_start = 0;
 
 
 /*
-   JUMLAH BYTE VALID
+   JUMLAH DATA VALID
    DALAM BUFFER
 */
 
@@ -267,7 +369,7 @@ tars_flash_buffer_length = 0;
 
 
 /*
-   ERROR
+   ERROR TERAKHIR
 */
 
 static const char *
@@ -280,7 +382,7 @@ tars_tts_error = "";
 
 static const char *
 tars_status_text =
-    "TARS A2DP READY";
+    "TARS READY";
 
 
 /* =========================================================
@@ -324,7 +426,53 @@ tars_find_tts_partition(
 
 
 /* =========================================================
-   CLEAR TTS STATE
+   CLEAR TTS PLAY STATE
+
+   TIDAK MENGHAPUS FLASH.
+
+   HANYA RESET
+   STATE PEMUTARAN.
+   ========================================================= */
+
+static void
+tars_clear_tts_play_state(
+    void
+)
+{
+    tars_tts_read_pos =
+        0;
+
+
+    tars_tts_resample_phase =
+        0;
+
+
+    tars_flash_buffer_start =
+        0;
+
+
+    tars_flash_buffer_length =
+        0;
+
+
+    tars_tts_playing =
+        false;
+
+
+    memset(
+        tars_flash_read_buffer,
+
+        0,
+
+        sizeof(
+            tars_flash_read_buffer
+        )
+    );
+}
+
+
+/* =========================================================
+   CLEAR FULL TTS STATE
    ========================================================= */
 
 static void
@@ -415,7 +563,8 @@ tars_erase_tts_flash(
 /* =========================================================
    FLASH READ BUFFER
 
-   MEMBACA 512 BYTE DARI FLASH
+   MEMBACA 512 BYTE
+   DARI FLASH
    ========================================================= */
 
 static bool
@@ -439,7 +588,8 @@ tars_load_flash_buffer(
 
 
     /*
-       ALIGN KE AWAL BUFFER
+       ALIGN KE AWAL
+       BLOK BUFFER
     */
 
     size_t aligned_position =
@@ -500,7 +650,15 @@ tars_load_flash_buffer(
 
 
 /* =========================================================
-   READ ONE PCM SAMPLE FROM FLASH
+   READ ONE PCM SAMPLE
+   FROM FLASH
+
+   FORMAT:
+
+   PCM
+   16 BIT
+   LITTLE ENDIAN
+   MONO
    ========================================================= */
 
 static bool
@@ -746,9 +904,12 @@ tars_generate_tone(
 /* =========================================================
    HTTP RECEIVE CALLBACK
 
-   AUDIO LANGSUNG DITULIS KE FLASH
+   DATA AUDIO
+   LANGSUNG DITULIS
+   KE FLASH
 
-   TIDAK DISIMPAN PENUH DI RAM
+   TIDAK DISIMPAN
+   PENUH DI RAM
    ========================================================= */
 
 static esp_err_t
@@ -775,6 +936,24 @@ tars_tts_http_event(
         }
 
 
+        /*
+           PENGAMAN:
+
+           JIKA BT AKTIF
+           DOWNLOAD TIDAK
+           BOLEH BERLANJUT
+        */
+
+        if (
+            tars_bt_started
+        ) {
+            tars_tts_error =
+                "BLUETOOTH ACTIVE DURING DOWNLOAD";
+
+            return ESP_FAIL;
+        }
+
+
         if (
             !tars_find_tts_partition()
         ) {
@@ -790,7 +969,8 @@ tars_tts_http_event(
 
 
         /*
-           CEK KAPASITAS FLASH
+           CEK KAPASITAS
+           PARTISI FLASH
         */
 
         if (
@@ -846,6 +1026,11 @@ tars_tts_http_event(
 
 /* =========================================================
    JSON ESCAPE
+
+   MEMBUAT:
+
+   {"text":"HALO"}
+
    ========================================================= */
 
 static char *
@@ -913,6 +1098,7 @@ tars_json_escape(
             result[pos++] =
                 '\\';
 
+
             result[pos++] =
                 c;
         }
@@ -922,6 +1108,7 @@ tars_json_escape(
         ) {
             result[pos++] =
                 '\\';
+
 
             result[pos++] =
                 'n';
@@ -933,6 +1120,7 @@ tars_json_escape(
             result[pos++] =
                 '\\';
 
+
             result[pos++] =
                 'r';
         }
@@ -942,6 +1130,7 @@ tars_json_escape(
         ) {
             result[pos++] =
                 '\\';
+
 
             result[pos++] =
                 't';
@@ -965,7 +1154,10 @@ tars_json_escape(
 
     result[pos++] = '"';
     result[pos++] = '}';
-    result[pos] = '\0';
+
+
+    result[pos] =
+        '\0';
 
 
     if (
@@ -983,7 +1175,12 @@ tars_json_escape(
 /* =========================================================
    A2DP AUDIO CALLBACK
 
-   AUDIO DIBACA DARI FLASH
+   PRIORITAS:
+
+   1. TTS DARI FLASH
+   2. INTERNAL TONE
+   3. SILENCE
+
    ========================================================= */
 
 static int32_t
@@ -1024,11 +1221,11 @@ tars_a2dp_data_callback(
     }
 
 
-    /*
+    /* =====================================================
        PRIORITAS 1
 
        TTS DARI FLASH
-    */
+       ===================================================== */
 
     if (
         tars_tts_playing &&
@@ -1077,6 +1274,11 @@ tars_a2dp_data_callback(
                 2;
 
 
+            /*
+               SIMPAN POSISI
+               UNTUK STATUS
+            */
+
             tars_tts_read_pos =
                 source_offset;
 
@@ -1092,6 +1294,10 @@ tars_a2dp_data_callback(
                     &sample
                 )
             ) {
+                /*
+                   AUDIO SELESAI
+                */
+
                 tars_tts_playing =
                     false;
 
@@ -1121,8 +1327,7 @@ tars_a2dp_data_callback(
 
             /*
                MONO
-               →
-
+               MENJADI
                STEREO
             */
 
@@ -1195,11 +1400,11 @@ tars_a2dp_data_callback(
     }
 
 
-    /*
+    /* =====================================================
        PRIORITAS 2
 
        INTERNAL TONE
-    */
+       ===================================================== */
 
     if (
         tars_tone_enabled
@@ -1212,11 +1417,11 @@ tars_a2dp_data_callback(
     }
 
 
-    /*
+    /* =====================================================
        PRIORITAS 3
 
        SILENCE
-    */
+       ===================================================== */
 
     memset(
         data,
@@ -1376,6 +1581,10 @@ tars_a2dp_event_callback(
     ) {
 
 
+        /* =================================================
+           CONNECTION STATE
+           ================================================= */
+
         case ESP_A2D_CONNECTION_STATE_EVT:
         {
 
@@ -1422,8 +1631,12 @@ tars_a2dp_event_callback(
                         false;
 
 
-                    tars_status_text =
-                        "A2DP DISCONNECTED";
+                    if (
+                        !tars_bt_stopping
+                    ) {
+                        tars_status_text =
+                            "A2DP DISCONNECTED";
+                    }
 
                     break;
 
@@ -1477,6 +1690,10 @@ tars_a2dp_event_callback(
             break;
         }
 
+
+        /* =================================================
+           AUDIO STATE
+           ================================================= */
 
         case ESP_A2D_AUDIO_STATE_EVT:
         {
@@ -1547,7 +1764,8 @@ tars_a2dp_event_callback(
 
 
                     if (
-                        tars_a2dp_connected
+                        tars_a2dp_connected &&
+                        !tars_bt_stopping
                     ) {
                         tars_status_text =
                             "A2DP CONNECTED";
@@ -1566,6 +1784,10 @@ tars_a2dp_event_callback(
             break;
         }
 
+
+        /* =================================================
+           MEDIA CONTROL ACK
+           ================================================= */
 
         case ESP_A2D_MEDIA_CTRL_ACK_EVT:
         {
@@ -1642,6 +1864,10 @@ tars_gap_callback(
     ) {
 
 
+        /* =================================================
+           DEVICE DISCOVERED
+           ================================================= */
+
         case ESP_BT_GAP_DISC_RES_EVT:
         {
 
@@ -1665,7 +1891,9 @@ tars_gap_callback(
                 i++
             ) {
                 esp_bt_gap_dev_prop_t *prop =
-                    &param->disc_res.prop[i];
+                    &param->disc_res.prop[
+                        i
+                    ];
 
 
                 if (
@@ -1766,6 +1994,10 @@ tars_gap_callback(
         }
 
 
+        /* =================================================
+           DISCOVERY STATE
+           ================================================= */
+
         case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
         {
 
@@ -1790,7 +2022,75 @@ tars_gap_callback(
 
 
 /* =========================================================
+   RESET BLUETOOTH STATE
+   ========================================================= */
+
+static void
+tars_reset_bluetooth_state(
+    void
+)
+{
+    tars_scanning =
+        false;
+
+
+    tars_device_found =
+        false;
+
+
+    tars_a2dp_connected =
+        false;
+
+
+    tars_a2dp_connecting =
+        false;
+
+
+    tars_audio_started =
+        false;
+
+
+    tars_tone_enabled =
+        false;
+
+
+    tars_tone_phase =
+        0;
+
+
+    tars_media_check_pending =
+        false;
+
+
+    tars_media_start_requested =
+        false;
+
+
+    tars_media_start_pending =
+        false;
+
+
+    tars_media_stop_pending =
+        false;
+
+
+    memset(
+        tars_target_bda,
+
+        0,
+
+        ESP_BD_ADDR_LEN
+    );
+}
+
+
+/* =========================================================
    START BLUETOOTH
+
+   PENTING:
+
+   TTS DOWNLOAD
+   TIDAK BOLEH SEDANG BERJALAN.
    ========================================================= */
 
 static mp_obj_t
@@ -1799,6 +2099,32 @@ tars_a2dp_start(
 )
 {
     esp_err_t ret;
+
+
+    if (
+        tars_tts_loading
+    ) {
+        return mp_obj_new_str(
+            "ERROR: TTS DOWNLOAD STILL RUNNING",
+
+            strlen(
+                "ERROR: TTS DOWNLOAD STILL RUNNING"
+            )
+        );
+    }
+
+
+    if (
+        tars_bt_stopping
+    ) {
+        return mp_obj_new_str(
+            "ERROR: BLUETOOTH STOPPING",
+
+            strlen(
+                "ERROR: BLUETOOTH STOPPING"
+            )
+        );
+    }
 
 
     if (
@@ -1814,9 +2140,16 @@ tars_a2dp_start(
     }
 
 
+    tars_reset_bluetooth_state();
+
+
     esp_bt_controller_config_t bt_cfg =
         BT_CONTROLLER_INIT_CONFIG_DEFAULT();
 
+
+    /* =====================================================
+       CONTROLLER INIT
+       ===================================================== */
 
     ret =
         esp_bt_controller_init(
@@ -1837,6 +2170,10 @@ tars_a2dp_start(
     }
 
 
+    /* =====================================================
+       CLASSIC BT ENABLE
+       ===================================================== */
+
     ret =
         esp_bt_controller_enable(
             ESP_BT_MODE_CLASSIC_BT
@@ -1846,6 +2183,9 @@ tars_a2dp_start(
     if (
         ret != ESP_OK
     ) {
+        esp_bt_controller_deinit();
+
+
         return mp_obj_new_str(
             "ERROR: BT CONTROLLER ENABLE FAILED",
 
@@ -1856,6 +2196,10 @@ tars_a2dp_start(
     }
 
 
+    /* =====================================================
+       BLUEDROID INIT
+       ===================================================== */
+
     ret =
         esp_bluedroid_init();
 
@@ -1863,6 +2207,11 @@ tars_a2dp_start(
     if (
         ret != ESP_OK
     ) {
+        esp_bt_controller_disable();
+
+        esp_bt_controller_deinit();
+
+
         return mp_obj_new_str(
             "ERROR: BLUEDROID INIT FAILED",
 
@@ -1873,6 +2222,10 @@ tars_a2dp_start(
     }
 
 
+    /* =====================================================
+       BLUEDROID ENABLE
+       ===================================================== */
+
     ret =
         esp_bluedroid_enable();
 
@@ -1880,6 +2233,13 @@ tars_a2dp_start(
     if (
         ret != ESP_OK
     ) {
+        esp_bluedroid_deinit();
+
+        esp_bt_controller_disable();
+
+        esp_bt_controller_deinit();
+
+
         return mp_obj_new_str(
             "ERROR: BLUEDROID ENABLE FAILED",
 
@@ -1890,6 +2250,10 @@ tars_a2dp_start(
     }
 
 
+    /* =====================================================
+       GAP CALLBACK
+       ===================================================== */
+
     ret =
         esp_bt_gap_register_callback(
             tars_gap_callback
@@ -1899,6 +2263,15 @@ tars_a2dp_start(
     if (
         ret != ESP_OK
     ) {
+        esp_bluedroid_disable();
+
+        esp_bluedroid_deinit();
+
+        esp_bt_controller_disable();
+
+        esp_bt_controller_deinit();
+
+
         return mp_obj_new_str(
             "ERROR: GAP CALLBACK FAILED",
 
@@ -1921,6 +2294,10 @@ tars_a2dp_start(
     );
 
 
+    /* =====================================================
+       A2DP CALLBACK
+       ===================================================== */
+
     ret =
         esp_a2d_register_callback(
             tars_a2dp_event_callback
@@ -1930,6 +2307,15 @@ tars_a2dp_start(
     if (
         ret != ESP_OK
     ) {
+        esp_bluedroid_disable();
+
+        esp_bluedroid_deinit();
+
+        esp_bt_controller_disable();
+
+        esp_bt_controller_deinit();
+
+
         return mp_obj_new_str(
             "ERROR: A2DP CALLBACK FAILED",
 
@@ -1940,6 +2326,10 @@ tars_a2dp_start(
     }
 
 
+    /* =====================================================
+       A2DP SOURCE INIT
+       ===================================================== */
+
     ret =
         esp_a2d_source_init();
 
@@ -1947,6 +2337,15 @@ tars_a2dp_start(
     if (
         ret != ESP_OK
     ) {
+        esp_bluedroid_disable();
+
+        esp_bluedroid_deinit();
+
+        esp_bt_controller_disable();
+
+        esp_bt_controller_deinit();
+
+
         return mp_obj_new_str(
             "ERROR: A2DP SOURCE INIT FAILED",
 
@@ -1957,6 +2356,10 @@ tars_a2dp_start(
     }
 
 
+    /* =====================================================
+       AUDIO DATA CALLBACK
+       ===================================================== */
+
     ret =
         esp_a2d_source_register_data_callback(
             tars_a2dp_data_callback
@@ -1966,6 +2369,17 @@ tars_a2dp_start(
     if (
         ret != ESP_OK
     ) {
+        esp_a2d_source_deinit();
+
+        esp_bluedroid_disable();
+
+        esp_bluedroid_deinit();
+
+        esp_bt_controller_disable();
+
+        esp_bt_controller_deinit();
+
+
         return mp_obj_new_str(
             "ERROR: AUDIO CALLBACK FAILED",
 
@@ -1978,6 +2392,10 @@ tars_a2dp_start(
 
     tars_bt_started =
         true;
+
+
+    tars_bt_stopping =
+        false;
 
 
     tars_status_text =
@@ -2003,6 +2421,10 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 /* =========================================================
    SCAN
+
+   MENCARI:
+
+   I7-TWS
    ========================================================= */
 
 static mp_obj_t
@@ -2024,6 +2446,19 @@ tars_a2dp_scan(
 
 
     if (
+        tars_bt_stopping
+    ) {
+        return mp_obj_new_str(
+            "ERROR: BLUETOOTH STOPPING",
+
+            strlen(
+                "ERROR: BLUETOOTH STOPPING"
+            )
+        );
+    }
+
+
+    if (
         tars_a2dp_connected
     ) {
         return mp_obj_new_str(
@@ -2031,6 +2466,19 @@ tars_a2dp_scan(
 
             strlen(
                 "ERROR: ALREADY CONNECTED"
+            )
+        );
+    }
+
+
+    if (
+        tars_scanning
+    ) {
+        return mp_obj_new_str(
+            "TARS ALREADY SCANNING",
+
+            strlen(
+                "TARS ALREADY SCANNING"
             )
         );
     }
@@ -2076,6 +2524,10 @@ tars_a2dp_scan(
         true;
 
 
+    tars_status_text =
+        "SCANNING FOR I7-TWS";
+
+
     return mp_obj_new_str(
         "TARS SCANNING FOR I7-TWS...",
 
@@ -2103,23 +2555,49 @@ tars_a2dp_found(
 )
 {
     if (
-        !tars_device_found
+        !tars_bt_started
     ) {
         return mp_obj_new_str(
-            "I7-TWS NOT FOUND",
+            "ERROR: BLUETOOTH NOT STARTED",
 
             strlen(
-                "I7-TWS NOT FOUND"
+                "ERROR: BLUETOOTH NOT STARTED"
+            )
+        );
+    }
+
+
+    if (
+        tars_device_found
+    ) {
+        return mp_obj_new_str(
+            "I7-TWS FOUND",
+
+            strlen(
+                "I7-TWS FOUND"
+            )
+        );
+    }
+
+
+    if (
+        tars_scanning
+    ) {
+        return mp_obj_new_str(
+            "STILL SCANNING",
+
+            strlen(
+                "STILL SCANNING"
             )
         );
     }
 
 
     return mp_obj_new_str(
-        "I7-TWS FOUND",
+        "I7-TWS NOT FOUND",
 
         strlen(
-            "I7-TWS FOUND"
+            "I7-TWS NOT FOUND"
         )
     );
 }
@@ -2155,6 +2633,19 @@ tars_a2dp_connect(
 
 
     if (
+        tars_bt_stopping
+    ) {
+        return mp_obj_new_str(
+            "ERROR: BLUETOOTH STOPPING",
+
+            strlen(
+                "ERROR: BLUETOOTH STOPPING"
+            )
+        );
+    }
+
+
+    if (
         !tars_device_found
     ) {
         return mp_obj_new_str(
@@ -2175,6 +2666,19 @@ tars_a2dp_connect(
 
             strlen(
                 "TARS ALREADY CONNECTED"
+            )
+        );
+    }
+
+
+    if (
+        tars_a2dp_connecting
+    ) {
+        return mp_obj_new_str(
+            "TARS ALREADY CONNECTING",
+
+            strlen(
+                "TARS ALREADY CONNECTING"
             )
         );
     }
@@ -2203,6 +2707,10 @@ tars_a2dp_connect(
         true;
 
 
+    tars_status_text =
+        "A2DP CONNECTING";
+
+
     return mp_obj_new_str(
         "TARS CONNECTING TO I7-TWS...",
 
@@ -2223,8 +2731,21 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 /* =========================================================
    TTS DOWNLOAD
 
-   WIFI/HTTPS HARUS DIGUNAKAN
-   SEBELUM BLUETOOTH AKTIF
+   ATURAN PENTING:
+
+   BLUETOOTH HARUS
+   BENAR-BENAR MATI.
+
+   JIKA BLUETOOTH SUDAH START:
+
+   JALANKAN:
+
+   tars_a2dp.bluetooth_stop()
+
+   BARU:
+
+   tars_a2dp.tts_download("...")
+
    ========================================================= */
 
 static mp_obj_t
@@ -2240,6 +2761,19 @@ tars_a2dp_tts_download(
 
             strlen(
                 "ERROR: STOP BLUETOOTH BEFORE DOWNLOAD"
+            )
+        );
+    }
+
+
+    if (
+        tars_bt_stopping
+    ) {
+        return mp_obj_new_str(
+            "ERROR: BLUETOOTH STILL STOPPING",
+
+            strlen(
+                "ERROR: BLUETOOTH STILL STOPPING"
             )
         );
     }
@@ -2311,9 +2845,9 @@ tars_a2dp_tts_download(
     }
 
 
-    /*
+    /* =====================================================
        RESET STATE
-    */
+       ===================================================== */
 
     tars_clear_tts_state();
 
@@ -2330,9 +2864,9 @@ tars_a2dp_tts_download(
         "TTS DOWNLOADING TO FLASH";
 
 
-    /*
+    /* =====================================================
        HAPUS AUDIO LAMA
-    */
+       ===================================================== */
 
     if (
         !tars_erase_tts_flash()
@@ -2350,6 +2884,10 @@ tars_a2dp_tts_download(
         );
     }
 
+
+    /* =====================================================
+       BUAT JSON
+       ===================================================== */
 
     size_t json_length =
         0;
@@ -2381,6 +2919,10 @@ tars_a2dp_tts_download(
         );
     }
 
+
+    /* =====================================================
+       HTTP CLIENT
+       ===================================================== */
 
     esp_http_client_config_t config =
     {
@@ -2465,6 +3007,14 @@ tars_a2dp_tts_download(
     );
 
 
+    /* =====================================================
+       HTTPS PERFORM
+
+       EVENT CALLBACK
+       AKAN LANGSUNG MENULIS
+       AUDIO KE FLASH
+       ===================================================== */
+
     esp_err_t ret =
         esp_http_client_perform(
             client
@@ -2491,6 +3041,10 @@ tars_a2dp_tts_download(
         false;
 
 
+    /* =====================================================
+       CEK ERROR INTERNAL
+       ===================================================== */
+
     if (
         tars_tts_error[0] !=
         '\0'
@@ -2508,10 +3062,18 @@ tars_a2dp_tts_download(
     }
 
 
+    /* =====================================================
+       CEK HTTP
+       ===================================================== */
+
     if (
         ret != ESP_OK
     ) {
         tars_clear_tts_state();
+
+
+        tars_status_text =
+            "TTS HTTP FAILED";
 
 
         return mp_obj_new_str(
@@ -2530,7 +3092,13 @@ tars_a2dp_tts_download(
         tars_clear_tts_state();
 
 
-        char result[64];
+        tars_status_text =
+            "TTS HTTP ERROR";
+
+
+        char result[
+            64
+        ];
 
 
         snprintf(
@@ -2556,11 +3124,19 @@ tars_a2dp_tts_download(
     }
 
 
+    /* =====================================================
+       CEK AUDIO
+       ===================================================== */
+
     if (
         tars_tts_flash_size <
         2
     ) {
         tars_clear_tts_state();
+
+
+        tars_status_text =
+            "TTS EMPTY";
 
 
         return mp_obj_new_str(
@@ -2573,6 +3149,10 @@ tars_a2dp_tts_download(
     }
 
 
+    /* =====================================================
+       AUDIO SIAP
+       ===================================================== */
+
     tars_tts_ready =
         true;
 
@@ -2581,7 +3161,9 @@ tars_a2dp_tts_download(
         "TTS SAVED TO FLASH";
 
 
-    char result[80];
+    char result[
+        80
+    ];
 
 
     snprintf(
@@ -2620,7 +3202,11 @@ static MP_DEFINE_CONST_FUN_OBJ_1(
 /* =========================================================
    TTS PLAY
 
-   BLUETOOTH HARUS SUDAH TERHUBUNG
+   SYARAT:
+
+   1. BLUETOOTH SUDAH START
+   2. A2DP TERHUBUNG
+   3. AUDIO SUDAH ADA DI FLASH
    ========================================================= */
 
 static mp_obj_t
@@ -2636,6 +3222,19 @@ tars_a2dp_tts_play(
 
             strlen(
                 "ERROR: START BLUETOOTH FIRST"
+            )
+        );
+    }
+
+
+    if (
+        tars_bt_stopping
+    ) {
+        return mp_obj_new_str(
+            "ERROR: BLUETOOTH STOPPING",
+
+            strlen(
+                "ERROR: BLUETOOTH STOPPING"
             )
         );
     }
@@ -2667,6 +3266,20 @@ tars_a2dp_tts_play(
     }
 
 
+    if (
+        tars_tts_flash_size <
+        2
+    ) {
+        return mp_obj_new_str(
+            "ERROR: TTS FLASH EMPTY",
+
+            strlen(
+                "ERROR: TTS FLASH EMPTY"
+            )
+        );
+    }
+
+
     /*
        MATIKAN TONE
     */
@@ -2676,7 +3289,8 @@ tars_a2dp_tts_play(
 
 
     /*
-       MULAI DARI AWAL FLASH
+       MULAI DARI AWAL
+       AUDIO FLASH
     */
 
     tars_tts_read_pos =
@@ -2695,6 +3309,10 @@ tars_a2dp_tts_play(
         0;
 
 
+    /*
+       MULAI PLAY
+    */
+
     tars_tts_playing =
         true;
 
@@ -2702,6 +3320,13 @@ tars_a2dp_tts_play(
     tars_status_text =
         "TTS PLAYING FROM FLASH";
 
+
+    /*
+       JIKA AUDIO A2DP
+       BELUM DIMULAI
+
+       REQUEST START
+    */
 
     if (
         !tars_audio_started
@@ -2746,7 +3371,16 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 
 /* =========================================================
-   STOP
+   STOP AUDIO
+
+   HANYA STOP STREAM AUDIO.
+
+   BLUETOOTH MASIH AKTIF.
+
+   UNTUK MEMATIKAN BLUETOOTH SEPENUHNYA:
+
+   bluetooth_stop()
+
    ========================================================= */
 
 static mp_obj_t
@@ -2813,6 +3447,10 @@ tars_a2dp_stop(
     }
 
 
+    tars_status_text =
+        "A2DP STOP REQUESTED";
+
+
     return mp_obj_new_str(
         "TARS A2DP STOP REQUESTED",
 
@@ -2827,6 +3465,238 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_stop_obj,
 
     tars_a2dp_stop
+);
+
+
+/* =========================================================
+   BLUETOOTH FULL STOP
+
+   MEMATIKAN:
+
+   - A2DP SOURCE
+   - BLUEDROID
+   - BT CONTROLLER
+
+   SETELAH BERHASIL:
+
+   tars_bt_started = false
+
+   MAKA:
+
+   tts_download()
+
+   BOLEH DIGUNAKAN LAGI.
+
+   ========================================================= */
+
+static mp_obj_t
+tars_a2dp_bluetooth_stop(
+    void
+)
+{
+    if (
+        !tars_bt_started
+    ) {
+        return mp_obj_new_str(
+            "BLUETOOTH ALREADY STOPPED",
+
+            strlen(
+                "BLUETOOTH ALREADY STOPPED"
+            )
+        );
+    }
+
+
+    if (
+        tars_tts_loading
+    ) {
+        return mp_obj_new_str(
+            "ERROR: TTS DOWNLOAD ACTIVE",
+
+            strlen(
+                "ERROR: TTS DOWNLOAD ACTIVE"
+            )
+        );
+    }
+
+
+    tars_bt_stopping =
+        true;
+
+
+    tars_status_text =
+        "BLUETOOTH STOPPING";
+
+
+    /*
+       STOP AUDIO STATE
+    */
+
+    tars_tone_enabled =
+        false;
+
+
+    tars_tts_playing =
+        false;
+
+
+    tars_tone_phase =
+        0;
+
+
+    tars_tts_resample_phase =
+        0;
+
+
+    /*
+       HENTIKAN SCAN
+    */
+
+    if (
+        tars_scanning
+    ) {
+        esp_bt_gap_cancel_discovery();
+
+        tars_scanning =
+            false;
+    }
+
+
+    /*
+       STOP MEDIA
+       JIKA MASIH STREAMING
+    */
+
+    if (
+        tars_audio_started &&
+        tars_a2dp_connected
+    ) {
+        esp_a2d_media_ctrl(
+            ESP_A2D_MEDIA_CTRL_STOP
+        );
+    }
+
+
+    /*
+       DISCONNECT DEVICE
+       JIKA MASIH TERHUBUNG
+    */
+
+    if (
+        tars_a2dp_connected ||
+        tars_a2dp_connecting
+    ) {
+        esp_a2d_source_disconnect(
+            tars_target_bda
+        );
+    }
+
+
+    /*
+       DEINIT A2DP SOURCE
+
+       JIKA SUDAH GAGAL,
+       LANJUTKAN CLEANUP
+       BAGIAN BERIKUTNYA.
+    */
+
+    esp_a2d_source_deinit();
+
+
+    /*
+       DISABLE BLUEDROID
+    */
+
+    if (
+        esp_bluedroid_get_status() ==
+        ESP_BLUEDROID_STATUS_ENABLED
+    ) {
+        esp_bluedroid_disable();
+    }
+
+
+    /*
+       DEINIT BLUEDROID
+    */
+
+    if (
+        esp_bluedroid_get_status() ==
+        ESP_BLUEDROID_STATUS_INITIALIZED
+    ) {
+        esp_bluedroid_deinit();
+    }
+
+
+    /*
+       DISABLE BT CONTROLLER
+    */
+
+    if (
+        esp_bt_controller_get_status() ==
+        ESP_BT_CONTROLLER_STATUS_ENABLED
+    ) {
+        esp_bt_controller_disable();
+    }
+
+
+    /*
+       DEINIT CONTROLLER
+    */
+
+    if (
+        esp_bt_controller_get_status() ==
+        ESP_BT_CONTROLLER_STATUS_INITED
+    ) {
+        esp_bt_controller_deinit();
+    }
+
+
+    /*
+       RESET SEMUA
+       STATE BLUETOOTH
+    */
+
+    tars_bt_started =
+        false;
+
+
+    tars_bt_stopping =
+        false;
+
+
+    tars_reset_bluetooth_state();
+
+
+    /*
+       AUDIO TTS
+       DI FLASH TETAP ADA.
+
+       JADI BISA
+       DIPUTAR LAGI
+       SETELAH START BT.
+
+       TIDAK PERLU
+       DOWNLOAD ULANG.
+    */
+
+    tars_status_text =
+        "BLUETOOTH STOPPED";
+
+
+    return mp_obj_new_str(
+        "BLUETOOTH FULLY STOPPED - WIFI MODE READY",
+
+        strlen(
+            "BLUETOOTH FULLY STOPPED - WIFI MODE READY"
+        )
+    );
+}
+
+
+static MP_DEFINE_CONST_FUN_OBJ_0(
+    tars_a2dp_bluetooth_stop_obj,
+
+    tars_a2dp_bluetooth_stop
 );
 
 
@@ -2858,6 +3728,13 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 /* =========================================================
    MEMORY
+
+   MENAMPILKAN:
+
+   FREE HEAP
+   LARGEST BLOCK
+   UKURAN AUDIO FLASH
+   UKURAN PARTISI TTS
    ========================================================= */
 
 static mp_obj_t
@@ -2877,7 +3754,21 @@ tars_a2dp_memory(
         );
 
 
-    char result[180];
+    size_t partition_size =
+        0;
+
+
+    if (
+        tars_find_tts_partition()
+    ) {
+        partition_size =
+            tars_tts_partition->size;
+    }
+
+
+    char result[
+        220
+    ];
 
 
     snprintf(
@@ -2887,7 +3778,9 @@ tars_a2dp_memory(
             result
         ),
 
-        "HEAP: %u | LARGEST: %u | FLASH TTS: %u",
+        "HEAP: %u | LARGEST: %u | "
+        "FLASH TTS: %u / %u | "
+        "BT: %s",
 
         (
             unsigned int
@@ -2902,7 +3795,18 @@ tars_a2dp_memory(
         (
             unsigned int
         )
-        tars_tts_flash_size
+        tars_tts_flash_size,
+
+        (
+            unsigned int
+        )
+        partition_size,
+
+        tars_bt_started
+            ?
+            "ON"
+            :
+            "OFF"
     );
 
 
@@ -2924,6 +3828,76 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 
 /* =========================================================
+   TTS INFO
+
+   INFORMASI AUDIO
+   YANG TERSIMPAN
+   ========================================================= */
+
+static mp_obj_t
+tars_a2dp_tts_info(
+    void
+)
+{
+    char result[
+        160
+    ];
+
+
+    snprintf(
+        result,
+
+        sizeof(
+            result
+        ),
+
+        "TTS READY: %s | "
+        "SIZE: %u BYTES | "
+        "PLAYING: %s | "
+        "POSITION: %u",
+
+        tars_tts_ready
+            ?
+            "YES"
+            :
+            "NO",
+
+        (
+            unsigned int
+        )
+        tars_tts_flash_size,
+
+        tars_tts_playing
+            ?
+            "YES"
+            :
+            "NO",
+
+        (
+            unsigned int
+        )
+        tars_tts_read_pos
+    );
+
+
+    return mp_obj_new_str(
+        result,
+
+        strlen(
+            result
+        )
+    );
+}
+
+
+static MP_DEFINE_CONST_FUN_OBJ_0(
+    tars_a2dp_tts_info_obj,
+
+    tars_a2dp_tts_info
+);
+
+
+/* =========================================================
    MODULE FUNCTIONS
    ========================================================= */
 
@@ -2941,6 +3915,10 @@ tars_a2dp_globals_table[] =
     },
 
 
+    /* =====================================================
+       BLUETOOTH START
+       ===================================================== */
+
     {
         MP_ROM_QSTR(
             MP_QSTR_start
@@ -2951,6 +3929,10 @@ tars_a2dp_globals_table[] =
         )
     },
 
+
+    /* =====================================================
+       SCAN
+       ===================================================== */
 
     {
         MP_ROM_QSTR(
@@ -2963,6 +3945,10 @@ tars_a2dp_globals_table[] =
     },
 
 
+    /* =====================================================
+       FOUND
+       ===================================================== */
+
     {
         MP_ROM_QSTR(
             MP_QSTR_found
@@ -2973,6 +3959,10 @@ tars_a2dp_globals_table[] =
         )
     },
 
+
+    /* =====================================================
+       CONNECT
+       ===================================================== */
 
     {
         MP_ROM_QSTR(
@@ -2985,6 +3975,10 @@ tars_a2dp_globals_table[] =
     },
 
 
+    /* =====================================================
+       TTS DOWNLOAD
+       ===================================================== */
+
     {
         MP_ROM_QSTR(
             MP_QSTR_tts_download
@@ -2995,6 +3989,10 @@ tars_a2dp_globals_table[] =
         )
     },
 
+
+    /* =====================================================
+       TTS PLAY
+       ===================================================== */
 
     {
         MP_ROM_QSTR(
@@ -3007,6 +4005,10 @@ tars_a2dp_globals_table[] =
     },
 
 
+    /* =====================================================
+       STOP AUDIO ONLY
+       ===================================================== */
+
     {
         MP_ROM_QSTR(
             MP_QSTR_stop
@@ -3017,6 +4019,31 @@ tars_a2dp_globals_table[] =
         )
     },
 
+
+    /* =====================================================
+       FULL BLUETOOTH STOP
+
+       PENTING:
+
+       SETELAH INI
+       DOWNLOAD HTTPS
+       BOLEH LAGI.
+       ===================================================== */
+
+    {
+        MP_ROM_QSTR(
+            MP_QSTR_bluetooth_stop
+        ),
+
+        MP_ROM_PTR(
+            &tars_a2dp_bluetooth_stop_obj
+        )
+    },
+
+
+    /* =====================================================
+       STATUS
+       ===================================================== */
 
     {
         MP_ROM_QSTR(
@@ -3029,6 +4056,10 @@ tars_a2dp_globals_table[] =
     },
 
 
+    /* =====================================================
+       MEMORY
+       ===================================================== */
+
     {
         MP_ROM_QSTR(
             MP_QSTR_memory
@@ -3037,9 +4068,28 @@ tars_a2dp_globals_table[] =
         MP_ROM_PTR(
             &tars_a2dp_memory_obj
         )
+    },
+
+
+    /* =====================================================
+       TTS INFO
+       ===================================================== */
+
+    {
+        MP_ROM_QSTR(
+            MP_QSTR_tts_info
+        ),
+
+        MP_ROM_PTR(
+            &tars_a2dp_tts_info_obj
+        )
     }
 };
 
+
+/* =========================================================
+   MICROPYTHON DICTIONARY
+   ========================================================= */
 
 static MP_DEFINE_CONST_DICT(
     tars_a2dp_globals,
@@ -3068,6 +4118,13 @@ tars_a2dp_user_cmodule =
 };
 
 
-/* PENTING: HARUS SATU BARIS */
+/* =========================================================
+   MODULE REGISTER
+
+   PENTING:
+
+   HARUS TETAP
+   SATU BARIS
+   ========================================================= */
 
 MP_REGISTER_MODULE(MP_QSTR_tars_a2dp, tars_a2dp_user_cmodule);
