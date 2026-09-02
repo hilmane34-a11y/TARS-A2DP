@@ -26,21 +26,37 @@
    BLUETOOTH CLASSIC A2DP SOURCE
    CLOUDFLARE TTS
 
-   ALUR:
+   WORKER:
+   https://tars-cloud-v3.hilmane34.workers.dev/tts
 
-   WiFi + HTTPS
+   REQUEST:
+   POST /tts
+   Content-Type: application/json
+
+   BODY:
+   {"text":"Halo TARS"}
+
+   RESPONSE:
+   RAW PCM
+   16 BIT
+   24000 Hz
+   MONO
+
+   AUDIO ALUR:
+
+   Cloudflare Worker
           ↓
-   DOWNLOAD AUDIO BERTAHAP
+   RAW PCM AUDIO
           ↓
-   LANGSUNG TULIS KE FLASH PARTITION "ttsdata"
+   FLASH "ttsdata"
           ↓
    WIFI OFF
           ↓
    BLUETOOTH ON
           ↓
-   BACA AUDIO DARI FLASH
+   I7-TWS
           ↓
-   PUTAR KE I7-TWS
+   AUDIO
 
    AUDIO TIDAK DISIMPAN PENUH DI RAM.
    ========================================================= */
@@ -56,22 +72,9 @@
 #define TARS_SAMPLE_RATE 44100
 #define TARS_TTS_SOURCE_RATE 24000
 
-/*
-   URL CLOUD TTS
-
-   HOST DAN PATH JUGA DISET SECARA EKSPLISIT
-   DI HTTP CONFIG.
-*/
-
-#define TARS_CLOUD_TTS_URL \
-    "https://tars-cloud-v3.hilmane34.workers.dev/tts"
-
-#define TARS_CLOUD_TTS_HOST \
-    "tars-cloud-v3.hilmane34.workers.dev"
-
-#define TARS_CLOUD_TTS_PATH \
-    "/tts"
-
+#define TARS_CLOUD_TTS_HOST "tars-cloud-v3.hilmane34.workers.dev"
+#define TARS_CLOUD_TTS_PATH "/tts"
+#define TARS_CLOUD_TTS_PORT 443
 
 #define TARS_TTS_MAX_TEXT_LENGTH 30
 
@@ -143,7 +146,7 @@ static uint64_t tars_tts_resample_phase = 0;
 
 
 /* =========================================================
-   BUFFER FLASH KECIL
+   FLASH READ BUFFER
    ========================================================= */
 
 static uint8_t
@@ -292,7 +295,8 @@ tars_load_flash_buffer(size_t position)
         tars_tts_flash_size -
         aligned_position;
 
-    size_t read_length = remaining;
+    size_t read_length =
+        remaining;
 
     if (
         read_length >
@@ -348,8 +352,10 @@ tars_read_pcm_sample(
     }
 
     bool inside_buffer =
-        (byte_position >=
-         tars_flash_buffer_start)
+        (
+            byte_position >=
+            tars_flash_buffer_start
+        )
         &&
         (
             byte_position + 1 <
@@ -379,10 +385,12 @@ tars_read_pcm_sample(
          ])
         |
         (
-            ((uint16_t)
-             tars_flash_read_buffer[
-                 local_position + 1
-             ])
+            (
+                (uint16_t)
+                tars_flash_read_buffer[
+                    local_position + 1
+                ]
+            )
             << 8
         );
 
@@ -411,7 +419,8 @@ tars_generate_tone(
     }
 
     int32_t usable_len =
-        len - (len % 4);
+        len -
+        (len % 4);
 
     int32_t position = 0;
 
@@ -419,9 +428,12 @@ tars_generate_tone(
         (uint32_t)
         (
             (
-                ((uint64_t)
-                 tars_tone_frequency *
-                 4294967296ULL)
+                (
+                    (uint64_t)
+                    tars_tone_frequency
+                    *
+                    4294967296ULL
+                )
                 /
                 TARS_SAMPLE_RATE
             )
@@ -480,8 +492,7 @@ tars_generate_tone(
 
 /* =========================================================
    HTTP RECEIVE CALLBACK
-
-   DATA LANGSUNG DITULIS KE FLASH
+   RAW AUDIO LANGSUNG KE FLASH
    ========================================================= */
 
 static esp_err_t
@@ -494,7 +505,6 @@ tars_tts_http_event(
     }
 
     switch (evt->event_id) {
-
 
     case HTTP_EVENT_ON_CONNECTED:
 
@@ -512,26 +522,14 @@ tars_tts_http_event(
         break;
 
 
-    case HTTP_EVENT_ON_HEADER:
-
-        break;
-
-
     case HTTP_EVENT_ON_DATA:
     {
-
         if (
             evt->data == NULL ||
             evt->data_len <= 0
         ) {
             return ESP_OK;
         }
-
-
-        /*
-           BLUETOOTH TIDAK BOLEH AKTIF
-           SAAT DOWNLOAD TTS
-        */
 
         if (tars_bt_started) {
 
@@ -541,16 +539,16 @@ tars_tts_http_event(
             return ESP_FAIL;
         }
 
-
         if (!tars_find_tts_partition()) {
+            tars_tts_error =
+                "TTS FLASH PARTITION NOT FOUND";
+
             return ESP_FAIL;
         }
-
 
         size_t incoming =
             (size_t)
             evt->data_len;
-
 
         if (
             tars_tts_flash_size +
@@ -564,7 +562,6 @@ tars_tts_http_event(
             return ESP_FAIL;
         }
 
-
         esp_err_t ret =
             esp_partition_write(
                 tars_tts_partition,
@@ -572,7 +569,6 @@ tars_tts_http_event(
                 evt->data,
                 incoming
             );
-
 
         if (ret != ESP_OK) {
 
@@ -582,7 +578,6 @@ tars_tts_http_event(
             return ESP_FAIL;
         }
 
-
         tars_tts_flash_size +=
             incoming;
 
@@ -591,6 +586,9 @@ tars_tts_http_event(
 
 
     case HTTP_EVENT_ON_FINISH:
+
+        tars_status_text =
+            "TTS HTTP FINISHED";
 
         break;
 
@@ -621,7 +619,8 @@ tars_json_escape(
 )
 {
     size_t capacity =
-        (length * 2) + 16;
+        (length * 2) +
+        32;
 
     char *result =
         heap_caps_malloc(
@@ -645,79 +644,78 @@ tars_json_escape(
     result[pos++] = ':';
     result[pos++] = '"';
 
+    size_t i = 0;
 
-    for (
-        size_t i = 0;
-        i < length;
-        i++
-    ) {
+    while (i < length) {
 
         char c =
             text[i];
-
 
         if (
             c == '"' ||
             c == '\\'
         ) {
 
-            result[pos++] = '\\';
+            result[pos++] =
+                '\\';
 
-            result[pos++] = c;
+            result[pos++] =
+                c;
         }
 
+        else if (c == '\n') {
 
-        else if (
-            c == '\n'
-        ) {
+            result[pos++] =
+                '\\';
 
-            result[pos++] = '\\';
-
-            result[pos++] = 'n';
+            result[pos++] =
+                'n';
         }
 
+        else if (c == '\r') {
 
-        else if (
-            c == '\r'
-        ) {
+            result[pos++] =
+                '\\';
 
-            result[pos++] = '\\';
-
-            result[pos++] = 'r';
+            result[pos++] =
+                'r';
         }
 
+        else if (c == '\t') {
 
-        else if (
-            c == '\t'
-        ) {
+            result[pos++] =
+                '\\';
 
-            result[pos++] = '\\';
-
-            result[pos++] = 't';
+            result[pos++] =
+                't';
         }
-
 
         else if (
             (unsigned char)c < 32
         ) {
 
+            i++;
+
             continue;
         }
 
-
         else {
 
-            result[pos++] = c;
+            result[pos++] =
+                c;
         }
+
+        i++;
     }
 
+    result[pos++] =
+        '"';
 
-    result[pos++] = '"';
+    result[pos++] =
+        '}';
 
-    result[pos++] = '}';
-
-    result[pos] = '\0';
-
+    result[pos] =
+        '\0';
 
     if (out_length != NULL) {
 
@@ -753,8 +751,8 @@ tars_a2dp_data_callback(
     }
 
     int32_t usable_len =
-        len - (len % 4);
-
+        len -
+        (len % 4);
 
     if (!tars_audio_started) {
 
@@ -780,17 +778,17 @@ tars_a2dp_data_callback(
 
         int32_t position = 0;
 
-
         const uint64_t
         phase_increment =
             (
-                ((uint64_t)
-                 TARS_TTS_SOURCE_RATE
-                 << 32)
+                (
+                    (uint64_t)
+                    TARS_TTS_SOURCE_RATE
+                    << 32
+                )
                 /
                 TARS_SAMPLE_RATE
             );
-
 
         while (
             position <
@@ -801,20 +799,19 @@ tars_a2dp_data_callback(
                 (size_t)
                 (
                     tars_tts_resample_phase
-                    >> 32
+                    >>
+                    32
                 );
 
-
             size_t source_offset =
-                source_sample * 2;
-
+                source_sample *
+                2;
 
             tars_tts_read_pos =
                 source_offset;
 
-
-            int16_t sample = 0;
-
+            int16_t sample =
+                0;
 
             if (
                 !tars_read_pcm_sample(
@@ -829,14 +826,12 @@ tars_a2dp_data_callback(
                 tars_tts_read_pos =
                     tars_tts_flash_size;
 
-
                 memset(
                     data + position,
                     0,
                     usable_len -
                     position
                 );
-
 
                 tars_status_text =
                     "TTS FINISHED";
@@ -845,9 +840,7 @@ tars_a2dp_data_callback(
             }
 
 
-            /*
-               MONO -> STEREO
-            */
+            /* MONO -> STEREO */
 
             data[position + 0] =
                 (uint8_t)
@@ -856,8 +849,8 @@ tars_a2dp_data_callback(
             data[position + 1] =
                 (uint8_t)
                 (
-                    (sample >> 8)
-                    & 0xFF
+                    (sample >> 8) &
+                    0xFF
                 );
 
             data[position + 2] =
@@ -867,18 +860,15 @@ tars_a2dp_data_callback(
             data[position + 3] =
                 (uint8_t)
                 (
-                    (sample >> 8)
-                    & 0xFF
+                    (sample >> 8) &
+                    0xFF
                 );
 
-
             position += 4;
-
 
             tars_tts_resample_phase +=
                 phase_increment;
         }
-
 
         return usable_len;
     }
@@ -926,11 +916,9 @@ tars_request_audio_start(void)
         return ESP_FAIL;
     }
 
-
     if (tars_audio_started) {
         return ESP_OK;
     }
-
 
     if (
         tars_media_check_pending ||
@@ -939,23 +927,19 @@ tars_request_audio_start(void)
         return ESP_OK;
     }
 
-
     tars_media_start_requested =
         true;
 
     tars_media_check_pending =
         true;
 
-
     tars_status_text =
         "A2DP CHECKING SOURCE";
-
 
     esp_err_t ret =
         esp_a2d_media_ctrl(
             ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY
         );
-
 
     if (ret != ESP_OK) {
 
@@ -984,26 +968,21 @@ tars_request_audio_stop(void)
         return ESP_FAIL;
     }
 
-
     if (!tars_audio_started) {
         return ESP_OK;
     }
-
 
     if (tars_media_stop_pending) {
         return ESP_OK;
     }
 
-
     tars_media_stop_pending =
         true;
-
 
     esp_err_t ret =
         esp_a2d_media_ctrl(
             ESP_A2D_MEDIA_CTRL_STOP
         );
-
 
     if (ret != ESP_OK) {
 
@@ -1031,13 +1010,11 @@ tars_a2dp_event_callback(
 
     switch (event) {
 
-
     case ESP_A2D_CONNECTION_STATE_EVT:
 
         switch (
             param->conn_stat.state
         ) {
-
 
         case ESP_A2D_CONNECTION_STATE_DISCONNECTED:
 
@@ -1067,7 +1044,6 @@ tars_a2dp_event_callback(
 
             tars_media_stop_pending =
                 false;
-
 
             if (!tars_bt_stopping) {
 
@@ -1126,7 +1102,6 @@ tars_a2dp_event_callback(
             param->audio_stat.state
         ) {
 
-
         case ESP_A2D_AUDIO_STATE_STARTED:
 
             tars_audio_started =
@@ -1143,7 +1118,6 @@ tars_a2dp_event_callback(
 
             tars_media_stop_pending =
                 false;
-
 
             if (tars_tts_playing) {
 
@@ -1176,7 +1150,6 @@ tars_a2dp_event_callback(
             tars_media_stop_pending =
                 false;
 
-
             if (
                 tars_a2dp_connected &&
                 !tars_bt_stopping
@@ -1207,7 +1180,6 @@ tars_a2dp_event_callback(
             tars_media_check_pending =
                 false;
 
-
             if (
                 param->media_ctrl_stat.status ==
                 ESP_A2D_MEDIA_CTRL_ACK_SUCCESS
@@ -1222,14 +1194,11 @@ tars_a2dp_event_callback(
                     tars_media_start_pending =
                         true;
 
-
                     esp_a2d_media_ctrl(
                         ESP_A2D_MEDIA_CTRL_START
                     );
                 }
             }
-
-
             else {
 
                 tars_media_start_requested =
@@ -1266,29 +1235,24 @@ tars_gap_callback(
 
     switch (event) {
 
-
     case ESP_BT_GAP_DISC_RES_EVT:
     {
-
         if (tars_device_found) {
             break;
         }
 
-
         uint8_t *eir =
             NULL;
 
+        int i = 0;
 
-        for (
-            int i = 0;
+        while (
             i <
-            param->disc_res.num_prop;
-            i++
+            param->disc_res.num_prop
         ) {
 
             esp_bt_gap_dev_prop_t *prop =
                 &param->disc_res.prop[i];
-
 
             if (
                 prop->type ==
@@ -1299,14 +1263,14 @@ tars_gap_callback(
                     (uint8_t *)
                     prop->val;
             }
-        }
 
+            i++;
+        }
 
         if (eir != NULL) {
 
             uint8_t name_len =
                 0;
-
 
             uint8_t *name =
                 esp_bt_gap_resolve_eir_data(
@@ -1314,7 +1278,6 @@ tars_gap_callback(
                     ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME,
                     &name_len
                 );
-
 
             if (name == NULL) {
 
@@ -1325,7 +1288,6 @@ tars_gap_callback(
                         &name_len
                     );
             }
-
 
             if (
                 name != NULL &&
@@ -1353,14 +1315,11 @@ tars_gap_callback(
                         ESP_BD_ADDR_LEN
                     );
 
-
                     tars_device_found =
                         true;
 
-
                     tars_status_text =
                         "I7-TWS FOUND";
-
 
                     esp_bt_gap_cancel_discovery();
                 }
@@ -1432,7 +1391,6 @@ tars_reset_bluetooth_state(void)
     tars_media_stop_pending =
         false;
 
-
     memset(
         tars_target_bda,
         0,
@@ -1450,7 +1408,6 @@ tars_a2dp_start(void)
 {
     esp_err_t ret;
 
-
     if (tars_tts_loading) {
 
         return mp_obj_new_str(
@@ -1460,7 +1417,6 @@ tars_a2dp_start(void)
             )
         );
     }
-
 
     if (tars_bt_stopping) {
 
@@ -1472,7 +1428,6 @@ tars_a2dp_start(void)
         );
     }
 
-
     if (tars_bt_started) {
 
         return mp_obj_new_str(
@@ -1483,19 +1438,15 @@ tars_a2dp_start(void)
         );
     }
 
-
     tars_reset_bluetooth_state();
-
 
     esp_bt_controller_config_t bt_cfg =
         BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-
 
     ret =
         esp_bt_controller_init(
             &bt_cfg
         );
-
 
     if (ret != ESP_OK) {
 
@@ -1507,17 +1458,14 @@ tars_a2dp_start(void)
         );
     }
 
-
     ret =
         esp_bt_controller_enable(
             ESP_BT_MODE_CLASSIC_BT
         );
 
-
     if (ret != ESP_OK) {
 
         esp_bt_controller_deinit();
-
 
         return mp_obj_new_str(
             "ERROR: BT CONTROLLER ENABLE FAILED",
@@ -1527,17 +1475,14 @@ tars_a2dp_start(void)
         );
     }
 
-
     ret =
         esp_bluedroid_init();
-
 
     if (ret != ESP_OK) {
 
         esp_bt_controller_disable();
 
         esp_bt_controller_deinit();
-
 
         return mp_obj_new_str(
             "ERROR: BLUEDROID INIT FAILED",
@@ -1547,10 +1492,8 @@ tars_a2dp_start(void)
         );
     }
 
-
     ret =
         esp_bluedroid_enable();
-
 
     if (ret != ESP_OK) {
 
@@ -1559,7 +1502,6 @@ tars_a2dp_start(void)
         esp_bt_controller_disable();
 
         esp_bt_controller_deinit();
-
 
         return mp_obj_new_str(
             "ERROR: BLUEDROID ENABLE FAILED",
@@ -1569,12 +1511,10 @@ tars_a2dp_start(void)
         );
     }
 
-
     ret =
         esp_bt_gap_register_callback(
             tars_gap_callback
         );
-
 
     if (ret != ESP_OK) {
 
@@ -1585,7 +1525,6 @@ tars_a2dp_start(void)
         esp_bt_controller_disable();
 
         esp_bt_controller_deinit();
-
 
         return mp_obj_new_str(
             "ERROR: GAP CALLBACK FAILED",
@@ -1595,23 +1534,19 @@ tars_a2dp_start(void)
         );
     }
 
-
     esp_bt_gap_set_device_name(
         TARS_DEVICE_NAME
     );
-
 
     esp_bt_gap_set_scan_mode(
         ESP_BT_CONNECTABLE,
         ESP_BT_NON_CONNECTABLE
     );
 
-
     ret =
         esp_a2d_register_callback(
             tars_a2dp_event_callback
         );
-
 
     if (ret != ESP_OK) {
 
@@ -1622,7 +1557,6 @@ tars_a2dp_start(void)
         esp_bt_controller_disable();
 
         esp_bt_controller_deinit();
-
 
         return mp_obj_new_str(
             "ERROR: A2DP CALLBACK FAILED",
@@ -1632,10 +1566,8 @@ tars_a2dp_start(void)
         );
     }
 
-
     ret =
         esp_a2d_source_init();
-
 
     if (ret != ESP_OK) {
 
@@ -1647,7 +1579,6 @@ tars_a2dp_start(void)
 
         esp_bt_controller_deinit();
 
-
         return mp_obj_new_str(
             "ERROR: A2DP SOURCE INIT FAILED",
             strlen(
@@ -1656,12 +1587,10 @@ tars_a2dp_start(void)
         );
     }
 
-
     ret =
         esp_a2d_source_register_data_callback(
             tars_a2dp_data_callback
         );
-
 
     if (ret != ESP_OK) {
 
@@ -1675,7 +1604,6 @@ tars_a2dp_start(void)
 
         esp_bt_controller_deinit();
 
-
         return mp_obj_new_str(
             "ERROR: AUDIO CALLBACK FAILED",
             strlen(
@@ -1683,7 +1611,6 @@ tars_a2dp_start(void)
             )
         );
     }
-
 
     tars_bt_started =
         true;
@@ -1693,7 +1620,6 @@ tars_a2dp_start(void)
 
     tars_status_text =
         "TARS BLUETOOTH READY";
-
 
     return mp_obj_new_str(
         "TARS BLUETOOTH CLASSIC A2DP READY",
@@ -1727,7 +1653,6 @@ tars_a2dp_scan(void)
         );
     }
 
-
     if (tars_bt_stopping) {
 
         return mp_obj_new_str(
@@ -1737,7 +1662,6 @@ tars_a2dp_scan(void)
             )
         );
     }
-
 
     if (tars_a2dp_connected) {
 
@@ -1749,7 +1673,6 @@ tars_a2dp_scan(void)
         );
     }
 
-
     if (tars_scanning) {
 
         return mp_obj_new_str(
@@ -1760,10 +1683,8 @@ tars_a2dp_scan(void)
         );
     }
 
-
     tars_device_found =
         false;
-
 
     memset(
         tars_target_bda,
@@ -1771,14 +1692,12 @@ tars_a2dp_scan(void)
         ESP_BD_ADDR_LEN
     );
 
-
     esp_err_t ret =
         esp_bt_gap_start_discovery(
             ESP_BT_INQ_MODE_GENERAL_INQUIRY,
             10,
             0
         );
-
 
     if (ret != ESP_OK) {
 
@@ -1790,14 +1709,11 @@ tars_a2dp_scan(void)
         );
     }
 
-
     tars_scanning =
         true;
 
-
     tars_status_text =
         "SCANNING FOR I7-TWS";
-
 
     return mp_obj_new_str(
         "TARS SCANNING FOR I7-TWS...",
@@ -1831,7 +1747,6 @@ tars_a2dp_found(void)
         );
     }
 
-
     if (tars_device_found) {
 
         return mp_obj_new_str(
@@ -1842,7 +1757,6 @@ tars_a2dp_found(void)
         );
     }
 
-
     if (tars_scanning) {
 
         return mp_obj_new_str(
@@ -1852,7 +1766,6 @@ tars_a2dp_found(void)
             )
         );
     }
-
 
     return mp_obj_new_str(
         "I7-TWS NOT FOUND",
@@ -1886,7 +1799,6 @@ tars_a2dp_connect(void)
         );
     }
 
-
     if (tars_bt_stopping) {
 
         return mp_obj_new_str(
@@ -1896,7 +1808,6 @@ tars_a2dp_connect(void)
             )
         );
     }
-
 
     if (!tars_device_found) {
 
@@ -1908,7 +1819,6 @@ tars_a2dp_connect(void)
         );
     }
 
-
     if (tars_a2dp_connected) {
 
         return mp_obj_new_str(
@@ -1918,7 +1828,6 @@ tars_a2dp_connect(void)
             )
         );
     }
-
 
     if (tars_a2dp_connecting) {
 
@@ -1930,12 +1839,10 @@ tars_a2dp_connect(void)
         );
     }
 
-
     esp_err_t ret =
         esp_a2d_source_connect(
             tars_target_bda
         );
-
 
     if (ret != ESP_OK) {
 
@@ -1947,14 +1854,11 @@ tars_a2dp_connect(void)
         );
     }
 
-
     tars_a2dp_connecting =
         true;
 
-
     tars_status_text =
         "A2DP CONNECTING";
-
 
     return mp_obj_new_str(
         "TARS CONNECTING TO I7-TWS...",
@@ -1990,7 +1894,6 @@ tars_a2dp_tts_download(
         );
     }
 
-
     if (tars_bt_stopping) {
 
         return mp_obj_new_str(
@@ -2000,7 +1903,6 @@ tars_a2dp_tts_download(
             )
         );
     }
-
 
     if (tars_tts_loading) {
 
@@ -2012,17 +1914,14 @@ tars_a2dp_tts_download(
         );
     }
 
-
     size_t text_length =
         0;
-
 
     const char *text =
         mp_obj_str_get_data(
             text_obj,
             &text_length
         );
-
 
     if (
         text == NULL ||
@@ -2037,7 +1936,6 @@ tars_a2dp_tts_download(
         );
     }
 
-
     if (
         text_length >
         TARS_TTS_MAX_TEXT_LENGTH
@@ -2051,7 +1949,6 @@ tars_a2dp_tts_download(
         );
     }
 
-
     if (!tars_find_tts_partition()) {
 
         return mp_obj_new_str(
@@ -2064,12 +1961,13 @@ tars_a2dp_tts_download(
 
 
     /* =====================================================
-       RESET STATE
+       RESET
        ===================================================== */
 
     tars_clear_tts_state();
 
-    tars_tts_error = "";
+    tars_tts_error =
+        "";
 
     tars_tts_loading =
         true;
@@ -2079,7 +1977,7 @@ tars_a2dp_tts_download(
 
 
     /* =====================================================
-       HAPUS AUDIO LAMA
+       ERASE AUDIO LAMA
        ===================================================== */
 
     if (!tars_erase_tts_flash()) {
@@ -2097,12 +1995,11 @@ tars_a2dp_tts_download(
 
 
     /* =====================================================
-       BUAT JSON
+       JSON
        ===================================================== */
 
     size_t json_length =
         0;
-
 
     char *json =
         tars_json_escape(
@@ -2110,7 +2007,6 @@ tars_a2dp_tts_download(
             text_length,
             &json_length
         );
-
 
     if (json == NULL) {
 
@@ -2129,23 +2025,33 @@ tars_a2dp_tts_download(
     /* =====================================================
        HTTP CONFIG
 
-       URL + HOST + PATH DISET EKSPLISIT.
+       WORKER:
 
-       TUJUAN:
-       MENGHINDARI KESALAHAN PARSING HOSTNAME
-       PADA BUILD ESP HTTP CLIENT TERTENTU.
-       ===================================================== */
+       https://tars-cloud-v3.hilmane34.workers.dev/tts
+
+       REQUEST:
+
+       POST /tts
+
+       BODY:
+
+       {"text":"Halo TARS"}
+
+       RESPONSE:
+
+       RAW PCM AUDIO
+    ===================================================== */
 
     esp_http_client_config_t config = {
-
-        .url =
-            TARS_CLOUD_TTS_URL,
 
         .host =
             TARS_CLOUD_TTS_HOST,
 
         .path =
             TARS_CLOUD_TTS_PATH,
+
+        .port =
+            TARS_CLOUD_TTS_PORT,
 
         .transport_type =
             HTTP_TRANSPORT_OVER_SSL,
@@ -2157,7 +2063,7 @@ tars_a2dp_tts_download(
             tars_tts_http_event,
 
         .timeout_ms =
-            20000,
+            30000,
 
         .buffer_size =
             TARS_HTTP_BUFFER_SIZE,
@@ -2178,7 +2084,6 @@ tars_a2dp_tts_download(
             &config
         );
 
-
     if (client == NULL) {
 
         heap_caps_free(
@@ -2191,7 +2096,6 @@ tars_a2dp_tts_download(
         tars_status_text =
             "HTTP CLIENT INIT FAILED";
 
-
         return mp_obj_new_str(
             "ERROR: HTTP CLIENT INIT FAILED",
             strlen(
@@ -2202,7 +2106,7 @@ tars_a2dp_tts_download(
 
 
     /* =====================================================
-       HTTP HEADERS
+       HEADERS
        ===================================================== */
 
     esp_http_client_set_header(
@@ -2211,33 +2115,22 @@ tars_a2dp_tts_download(
         "application/json"
     );
 
-
-    /*
-       HOST DISET EKSPLISIT
-    */
-
-    esp_http_client_set_header(
-        client,
-        "Host",
-        TARS_CLOUD_TTS_HOST
-    );
-
-
-    /*
-       FORMAT AUDIO YANG DIHARAPKAN:
-
-       PCM 16 BIT
-       LITTLE ENDIAN
-       MONO
-       24000 Hz
-    */
-
     esp_http_client_set_header(
         client,
         "Accept",
         "audio/L16"
     );
 
+    esp_http_client_set_header(
+        client,
+        "User-Agent",
+        "TARS-V1-MANZ"
+    );
+
+
+    /* =====================================================
+       POST BODY
+       ===================================================== */
 
     esp_http_client_set_post_field(
         client,
@@ -2247,7 +2140,7 @@ tars_a2dp_tts_download(
 
 
     /* =====================================================
-       DOWNLOAD
+       HTTP REQUEST
        ===================================================== */
 
     tars_status_text =
@@ -2260,28 +2153,40 @@ tars_a2dp_tts_download(
         );
 
 
+    /* =====================================================
+       GET RESULT
+       ===================================================== */
+
     int status_code =
         esp_http_client_get_status_code(
             client
         );
 
 
+    int64_t content_length =
+        esp_http_client_get_content_length(
+            client
+        );
+
+
+    /* =====================================================
+       CLEANUP HTTP
+       ===================================================== */
+
     esp_http_client_cleanup(
         client
     );
 
-
     heap_caps_free(
         json
     );
-
 
     tars_tts_loading =
         false;
 
 
     /* =====================================================
-       ERROR INTERNAL
+       INTERNAL ERROR
        ===================================================== */
 
     if (
@@ -2292,9 +2197,7 @@ tars_a2dp_tts_download(
         const char *error =
             tars_tts_error;
 
-
         tars_clear_tts_state();
-
 
         return mp_obj_new_str(
             error,
@@ -2306,7 +2209,7 @@ tars_a2dp_tts_download(
 
 
     /* =====================================================
-       HTTP TRANSPORT ERROR
+       TRANSPORT ERROR
        ===================================================== */
 
     if (ret != ESP_OK) {
@@ -2315,7 +2218,6 @@ tars_a2dp_tts_download(
 
         tars_status_text =
             "TTS HTTP FAILED";
-
 
         return mp_obj_new_str(
             "ERROR: TTS HTTP REQUEST FAILED",
@@ -2327,7 +2229,7 @@ tars_a2dp_tts_download(
 
 
     /* =====================================================
-       HTTP STATUS ERROR
+       HTTP ERROR
        ===================================================== */
 
     if (
@@ -2340,9 +2242,7 @@ tars_a2dp_tts_download(
         tars_status_text =
             "TTS HTTP ERROR";
 
-
-        char result[64];
-
+        char result[80];
 
         snprintf(
             result,
@@ -2350,7 +2250,6 @@ tars_a2dp_tts_download(
             "ERROR: TTS HTTP %d",
             status_code
         );
-
 
         return mp_obj_new_str(
             result,
@@ -2375,7 +2274,6 @@ tars_a2dp_tts_download(
         tars_status_text =
             "TTS EMPTY";
 
-
         return mp_obj_new_str(
             "ERROR: TTS EMPTY AUDIO",
             strlen(
@@ -2386,27 +2284,74 @@ tars_a2dp_tts_download(
 
 
     /* =====================================================
-       TTS SIAP
+       PCM 16 BIT
+       Pastikan jumlah byte genap
+       ===================================================== */
+
+    tars_tts_flash_size =
+        tars_tts_flash_size &
+        ~(size_t)1;
+
+
+    if (
+        tars_tts_flash_size <
+        2
+    ) {
+
+        tars_clear_tts_state();
+
+        tars_status_text =
+            "TTS INVALID PCM";
+
+        return mp_obj_new_str(
+            "ERROR: INVALID PCM AUDIO",
+            strlen(
+                "ERROR: INVALID PCM AUDIO"
+            )
+        );
+    }
+
+
+    /* =====================================================
+       SIAP
        ===================================================== */
 
     tars_tts_ready =
         true;
 
-
     tars_status_text =
         "TTS SAVED TO FLASH";
 
 
-    char result[80];
-
+    char result[120];
 
     snprintf(
         result,
         sizeof(result),
-        "TTS SAVED: %u BYTES",
+
+        "TTS SAVED: %u BYTES HTTP:%d",
+
         (unsigned int)
-        tars_tts_flash_size
+        tars_tts_flash_size,
+
+        status_code
     );
+
+
+    if (
+        content_length > 0 &&
+        tars_tts_flash_size == 0
+    ) {
+
+        tars_clear_tts_state();
+
+        return mp_obj_new_str(
+            "ERROR: TTS AUDIO NOT RECEIVED",
+            strlen(
+                "ERROR: TTS AUDIO NOT RECEIVED"
+            )
+        );
+    }
 
 
     return mp_obj_new_str(
@@ -2441,7 +2386,6 @@ tars_a2dp_tts_play(void)
         );
     }
 
-
     if (tars_bt_stopping) {
 
         return mp_obj_new_str(
@@ -2451,7 +2395,6 @@ tars_a2dp_tts_play(void)
             )
         );
     }
-
 
     if (!tars_a2dp_connected) {
 
@@ -2463,7 +2406,6 @@ tars_a2dp_tts_play(void)
         );
     }
 
-
     if (!tars_tts_ready) {
 
         return mp_obj_new_str(
@@ -2473,7 +2415,6 @@ tars_a2dp_tts_play(void)
             )
         );
     }
-
 
     if (
         tars_tts_flash_size <
@@ -2488,33 +2429,26 @@ tars_a2dp_tts_play(void)
         );
     }
 
-
     tars_tone_enabled =
         false;
 
-
     tars_clear_tts_play_state();
-
 
     tars_tts_playing =
         true;
 
-
     tars_status_text =
         "TTS PLAYING FROM FLASH";
-
 
     if (!tars_audio_started) {
 
         esp_err_t ret =
             tars_request_audio_start();
 
-
         if (ret != ESP_OK) {
 
             tars_tts_playing =
                 false;
-
 
             return mp_obj_new_str(
                 "ERROR: A2DP AUDIO START FAILED",
@@ -2524,7 +2458,6 @@ tars_a2dp_tts_play(void)
             );
         }
     }
-
 
     return mp_obj_new_str(
         "TTS PLAY REQUESTED",
@@ -2560,7 +2493,6 @@ tars_a2dp_stop(void)
     tars_tts_resample_phase =
         0;
 
-
     if (!tars_a2dp_connected) {
 
         return mp_obj_new_str(
@@ -2570,7 +2502,6 @@ tars_a2dp_stop(void)
             )
         );
     }
-
 
     if (!tars_audio_started) {
 
@@ -2582,10 +2513,8 @@ tars_a2dp_stop(void)
         );
     }
 
-
     esp_err_t ret =
         tars_request_audio_stop();
-
 
     if (ret != ESP_OK) {
 
@@ -2597,10 +2526,8 @@ tars_a2dp_stop(void)
         );
     }
 
-
     tars_status_text =
         "A2DP STOP REQUESTED";
-
 
     return mp_obj_new_str(
         "TARS A2DP STOP REQUESTED",
@@ -2634,7 +2561,6 @@ tars_a2dp_bluetooth_stop(void)
         );
     }
 
-
     if (tars_tts_loading) {
 
         return mp_obj_new_str(
@@ -2645,14 +2571,11 @@ tars_a2dp_bluetooth_stop(void)
         );
     }
 
-
     tars_bt_stopping =
         true;
 
-
     tars_status_text =
         "BLUETOOTH STOPPING";
-
 
     tars_tone_enabled =
         false;
@@ -2666,7 +2589,6 @@ tars_a2dp_bluetooth_stop(void)
     tars_tts_resample_phase =
         0;
 
-
     if (tars_scanning) {
 
         esp_bt_gap_cancel_discovery();
@@ -2676,15 +2598,7 @@ tars_a2dp_bluetooth_stop(void)
     }
 
 
-    /*
-       DEINIT A2DP
-
-       TIDAK MENUNGGU EVENT
-       DISCONNECT TERLALU LAMA
-       AGAR BT BISA SEGERA
-       DIGUNAKAN BERGANTIAN
-       DENGAN WIFI.
-    */
+    /* A2DP */
 
     if (
         esp_bluedroid_get_status() ==
@@ -2694,6 +2608,8 @@ tars_a2dp_bluetooth_stop(void)
         esp_a2d_source_deinit();
     }
 
+
+    /* BLUEDROID */
 
     if (
         esp_bluedroid_get_status() ==
@@ -2712,6 +2628,8 @@ tars_a2dp_bluetooth_stop(void)
         esp_bluedroid_deinit();
     }
 
+
+    /* BT CONTROLLER */
 
     if (
         esp_bt_controller_get_status() ==
@@ -2737,13 +2655,10 @@ tars_a2dp_bluetooth_stop(void)
     tars_bt_stopping =
         false;
 
-
     tars_reset_bluetooth_state();
-
 
     tars_status_text =
         "BLUETOOTH STOPPED";
-
 
     return mp_obj_new_str(
         "BLUETOOTH FULLY STOPPED - WIFI MODE READY",
@@ -2794,16 +2709,13 @@ tars_a2dp_memory(void)
             MALLOC_CAP_8BIT
         );
 
-
     size_t largest_8bit =
         heap_caps_get_largest_free_block(
             MALLOC_CAP_8BIT
         );
 
-
     size_t partition_size =
         0;
-
 
     if (
         tars_find_tts_partition()
@@ -2813,9 +2725,7 @@ tars_a2dp_memory(void)
             tars_tts_partition->size;
     }
 
-
     char result[220];
-
 
     snprintf(
         result,
@@ -2845,7 +2755,6 @@ tars_a2dp_memory(void)
         "OFF"
     );
 
-
     return mp_obj_new_str(
         result,
         strlen(
@@ -2869,7 +2778,6 @@ static mp_obj_t
 tars_a2dp_tts_info(void)
 {
     char result[160];
-
 
     snprintf(
         result,
@@ -2898,7 +2806,6 @@ tars_a2dp_tts_info(void)
         (unsigned int)
         tars_tts_read_pos
     );
-
 
     return mp_obj_new_str(
         result,
@@ -2932,7 +2839,6 @@ tars_a2dp_globals_table[] =
         )
     },
 
-
     {
         MP_ROM_QSTR(
             MP_QSTR_start
@@ -2942,7 +2848,6 @@ tars_a2dp_globals_table[] =
             &tars_a2dp_start_obj
         )
     },
-
 
     {
         MP_ROM_QSTR(
@@ -2954,7 +2859,6 @@ tars_a2dp_globals_table[] =
         )
     },
 
-
     {
         MP_ROM_QSTR(
             MP_QSTR_found
@@ -2964,7 +2868,6 @@ tars_a2dp_globals_table[] =
             &tars_a2dp_found_obj
         )
     },
-
 
     {
         MP_ROM_QSTR(
@@ -2976,7 +2879,6 @@ tars_a2dp_globals_table[] =
         )
     },
 
-
     {
         MP_ROM_QSTR(
             MP_QSTR_tts_download
@@ -2986,7 +2888,6 @@ tars_a2dp_globals_table[] =
             &tars_a2dp_tts_download_obj
         )
     },
-
 
     {
         MP_ROM_QSTR(
@@ -2998,7 +2899,6 @@ tars_a2dp_globals_table[] =
         )
     },
 
-
     {
         MP_ROM_QSTR(
             MP_QSTR_stop
@@ -3008,7 +2908,6 @@ tars_a2dp_globals_table[] =
             &tars_a2dp_stop_obj
         )
     },
-
 
     {
         MP_ROM_QSTR(
@@ -3020,7 +2919,6 @@ tars_a2dp_globals_table[] =
         )
     },
 
-
     {
         MP_ROM_QSTR(
             MP_QSTR_status
@@ -3031,7 +2929,6 @@ tars_a2dp_globals_table[] =
         )
     },
 
-
     {
         MP_ROM_QSTR(
             MP_QSTR_memory
@@ -3041,7 +2938,6 @@ tars_a2dp_globals_table[] =
             &tars_a2dp_memory_obj
         )
     },
-
 
     {
         MP_ROM_QSTR(
@@ -3085,8 +2981,7 @@ tars_a2dp_user_cmodule =
 
 /* =========================================================
    MODULE REGISTER
-
-   HARUS TETAP SATU BARIS
+   HARUS SATU BARIS
    ========================================================= */
 
 MP_REGISTER_MODULE(MP_QSTR_tars_a2dp, tars_a2dp_user_cmodule);
