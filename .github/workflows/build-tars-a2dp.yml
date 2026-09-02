@@ -15,38 +15,19 @@ jobs:
       - name: Install packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            git make gcc g++ cmake ninja-build \
-            python3 python3-pip flex bison gperf \
-            ccache libffi-dev libssl-dev \
-            dfu-util libusb-1.0-0
+          sudo apt-get install -y git make gcc g++ cmake ninja-build python3 python3-pip flex bison gperf ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
 
       - name: Clone MicroPython
         run: |
-          git clone --depth 1 \
-            https://github.com/micropython/micropython.git \
-            micropython
-
+          git clone --depth 1 https://github.com/micropython/micropython.git micropython
           cd micropython
-          git submodule update \
-            --init \
-            --recursive \
-            --depth 1
+          git submodule update --init --recursive --depth 1
 
       - name: Clone ESP-IDF
         run: |
-          git clone \
-            --depth 1 \
-            --branch v5.5.2 \
-            https://github.com/espressif/esp-idf.git \
-            esp-idf
-
+          git clone --depth 1 --branch v5.5.2 https://github.com/espressif/esp-idf.git esp-idf
           cd esp-idf
-
-          git submodule update \
-            --init \
-            --recursive \
-            --filter=tree:0
+          git submodule update --init --recursive --filter=tree:0
 
       - name: Install ESP-IDF
         run: |
@@ -62,9 +43,7 @@ jobs:
         shell: bash
         run: |
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
-
           cd "$GITHUB_WORKSPACE/micropython"
-
           make -C ports/esp32 submodules
 
       - name: Install TARS board
@@ -74,131 +53,169 @@ jobs:
 
           mkdir -p "$BOARD_DIR"
 
-          cp \
-            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.h" \
-            "$BOARD_DIR/"
+          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.h" "$BOARD_DIR/"
+          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.cmake" "$BOARD_DIR/"
+          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" "$BOARD_DIR/"
+          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/partitions.csv" "$BOARD_DIR/"
 
-          cp \
-            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.cmake" \
-            "$BOARD_DIR/"
-
-          cp \
-            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" \
-            "$BOARD_DIR/"
-
-          cp \
-            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/partitions.csv" \
-            "$BOARD_DIR/"
+          echo "========================================"
+          echo "TARS BOARD INSTALLED"
+          echo "========================================"
+          ls -la "$BOARD_DIR"
 
       - name: Enable HTTPS Certificate Bundle
         shell: bash
         run: |
           BOARD="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth"
 
-          sed -i \
-            '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=/d' \
-            "$BOARD"
-
-          sed -i \
-            '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=/d' \
-            "$BOARD"
-
-          sed -i \
-            '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=/d' \
-            "$BOARD"
-
-          sed -i \
-            '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' \
-            "$BOARD"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=/d' "$BOARD"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=/d' "$BOARD"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=/d' "$BOARD"
+          sed -i '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
 
           cat >> "$BOARD" << 'EOF'
 
-          # TARS HTTPS
+          # HTTPS / TLS untuk TARS Cloud TTS
           CONFIG_MBEDTLS_SSL_ALPN=y
 
-          # ESP-IDF CA Certificate Bundle
+          # Certificate Bundle
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=n
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 
+          # HTTPS client
           CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
           EOF
 
-          echo "===== BOARD HTTPS CONFIG ====="
-          grep -E \
-            "CONFIG_MBEDTLS_CERTIFICATE|CONFIG_MBEDTLS_SSL_ALPN|CONFIG_ESP_TLS" \
-            "$BOARD" \
-            || true
+          echo "========================================"
+          echo "TARS HTTPS CONFIG"
+          echo "========================================"
 
-      - name: Patch requests HTTPS backend
+          tail -n 25 "$BOARD"
+
+      - name: Patch requests HTTPS backend to ssl
         shell: bash
         run: |
-          MP="$GITHUB_WORKSPACE/micropython"
+          REQ="$GITHUB_WORKSPACE/micropython/lib/micropython-lib/python-ecosys/requests/requests/__init__.py"
+          UREQ="$GITHUB_WORKSPACE/micropython/lib/micropython-lib/micropython/urequests/urequests.py"
 
           echo "========================================"
           echo "SEARCHING REQUESTS SOURCES"
           echo "========================================"
 
-          find "$MP" \
-            -type f \
-            \( \
-              -name "urequests.py" -o \
-              -path "*/requests/__init__.py" \
-            \) \
-            -print \
-            || true
+          if [ -f "$UREQ" ]; then
+            echo "$UREQ"
+          else
+            echo "NOT FOUND: $UREQ"
+          fi
+
+          if [ -f "$REQ" ]; then
+            echo "$REQ"
+          else
+            echo "NOT FOUND: $REQ"
+          fi
 
           echo ""
           echo "========================================"
-          echo "TLS REFERENCES"
+          echo "TLS REFERENCES BEFORE PATCH"
           echo "========================================"
 
-          grep -R -n \
-            --include="*.py" \
-            -E "^import tls|from tls|tls\.SSLContext|PROTOCOL_TLS_CLIENT" \
-            "$MP/lib" \
-            "$MP/extmod" \
-            2>/dev/null \
-            || true
+          grep -n \
+            -E "import tls|from tls|SSLContext|PROTOCOL_TLS" \
+            "$REQ" "$UREQ" \
+            2>/dev/null || true
 
           echo ""
           echo "========================================"
-          echo "NO BLIND PATCH"
+          echo "PATCHING HTTPS BACKEND"
           echo "========================================"
 
-          echo "Firmware TLS implementation will be verified during build."
+          for FILE in "$REQ" "$UREQ"; do
+            if [ -f "$FILE" ]; then
+              echo "PATCHING: $FILE"
+
+              sed -i \
+                's/^import tls$/import ssl as tls/' \
+                "$FILE"
+
+              sed -i \
+                's/^import ssl$/import ssl as tls/' \
+                "$FILE"
+
+              echo "PATCH DONE: $FILE"
+            fi
+          done
+
+          echo ""
+          echo "========================================"
+          echo "TLS REFERENCES AFTER PATCH"
+          echo "========================================"
+
+          grep -n \
+            -E "import ssl|import tls|from ssl|from tls|SSLContext|PROTOCOL_TLS" \
+            "$REQ" "$UREQ" \
+            2>/dev/null || true
+
+          echo ""
+          echo "========================================"
+          echo "VERIFY REQUESTS IMPORT"
+          echo "========================================"
+
+          if [ -f "$REQ" ]; then
+            grep -n \
+              -E "^import ssl as tls$|^import tls$" \
+              "$REQ" \
+              || true
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "VERIFY UREQUESTS IMPORT"
+          echo "========================================"
+
+          if [ -f "$UREQ" ]; then
+            grep -n \
+              -E "^import ssl as tls$|^import tls$" \
+              "$UREQ" \
+              || true
+          fi
 
       - name: Patch A2DP queue
         shell: bash
         run: |
           A2DP_FILE="$GITHUB_WORKSPACE/esp-idf/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_a2dp_source.c"
 
-          if [ ! -f "$A2DP_FILE" ]; then
-            echo "A2DP SOURCE FILE NOT FOUND"
+          echo "========================================"
+          echo "PATCH A2DP QUEUE"
+          echo "========================================"
+
+          if [ -f "$A2DP_FILE" ]; then
+
+            echo "BEFORE:"
+            grep -n \
+              "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
+              "$A2DP_FILE" \
+              || true
+
+            sed -i \
+              's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
+              "$A2DP_FILE"
+
+            echo ""
+            echo "AFTER:"
+            grep -n \
+              "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
+              "$A2DP_FILE" \
+              || true
+
+          else
+            echo "A2DP FILE NOT FOUND"
             exit 1
           fi
-
-          grep -n \
-            "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE" \
-            || true
-
-          sed -i \
-            's/MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
-            "$A2DP_FILE"
-
-          echo "===== A2DP PATCH RESULT ====="
-
-          grep -n \
-            "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE" \
-            || true
 
       - name: Build TARS firmware
         shell: bash
         run: |
-          set -o pipefail
-
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
@@ -221,13 +238,14 @@ jobs:
           echo "========================================"
 
           if [ -f "$BUILD/sdkconfig" ]; then
+
             grep -n \
-              -E \
-              "^CONFIG_(MBEDTLS_CERTIFICATE|MBEDTLS_SSL|ESP_TLS)" \
+              -E "CONFIG_ESP_TLS|CONFIG_MBEDTLS_SSL|CONFIG_MBEDTLS_CERTIFICATE" \
               "$BUILD/sdkconfig" \
               || true
+
           else
-            echo "sdkconfig NOT FOUND"
+            echo "SDKCONFIG NOT FOUND"
           fi
 
           echo ""
@@ -236,55 +254,52 @@ jobs:
           echo "========================================"
 
           if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
+
             grep -n \
-              "tars_a2dp" \
+              -E "tars_a2dp|tars_bluetooth" \
               "$BUILD/genhdr/moduledefs.collected" \
               || true
+
+          else
+            echo "MODULEDEFS NOT FOUND"
           fi
 
           echo ""
           echo "========================================"
-          echo "BUILD ERRORS"
+          echo "FIRMWARE CHECK"
           echo "========================================"
 
-          grep -n -m 30 \
-            -E \
-            "fatal error:|error:|FAILED:|undefined reference|partition is too small" \
-            "$GITHUB_WORKSPACE/tars_build.log" \
-            || true
+          if [ -f "$BUILD/firmware.bin" ]; then
+            ls -lh "$BUILD/firmware.bin"
+          else
+            echo "FIRMWARE NOT FOUND"
+          fi
 
           echo ""
           echo "========================================"
-          echo "LAST 150 BUILD LINES"
+          echo "LAST BUILD LOG"
           echo "========================================"
 
-          tail -n 150 \
+          tail -n 100 \
             "$GITHUB_WORKSPACE/tars_build.log" \
             || true
-
-      - name: Verify firmware
-        shell: bash
-        run: |
-          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
-
-          if [ ! -f "$BUILD/firmware.bin" ]; then
-            echo "FIRMWARE.BIN NOT FOUND"
-            exit 1
-          fi
-
-          echo "===== FIRMWARE ====="
-          ls -lh "$BUILD/firmware.bin"
 
       - name: Prepare firmware
         shell: bash
         run: |
-          mkdir -p output
+          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
+
+          mkdir -p "$GITHUB_WORKSPACE/output"
 
           cp \
-            "$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin" \
+            "$BUILD/firmware.bin" \
             "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP.bin"
 
-          ls -lh output/
+          echo "========================================"
+          echo "OUTPUT FIRMWARE"
+          echo "========================================"
+
+          ls -lh "$GITHUB_WORKSPACE/output"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
@@ -293,12 +308,10 @@ jobs:
           path: output/TARS-MicroPython-ESP32-A2DP.bin
           if-no-files-found: error
 
-      - name: Upload diagnostic log
+      - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: TARS-HTTPS-Diagnostic
-          path: |
-            tars_build.log
-            micropython/ports/esp32/build-TARS_ESP32_A2DP/sdkconfig
+          name: TARS-Build-Log
+          path: tars_build.log
           if-no-files-found: warn
