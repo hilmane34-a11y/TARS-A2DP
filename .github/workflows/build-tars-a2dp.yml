@@ -57,31 +57,32 @@ jobs:
           cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" "$BOARD_DIR/"
           cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/partitions.csv" "$BOARD_DIR/"
 
-      - name: Fix HTTPS SSL configuration
+      - name: Enable HTTPS Certificate Bundle
         shell: bash
         run: |
-          BOARD="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP"
+          BOARD="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth"
 
-          echo "===== BEFORE ====="
-          cat "$BOARD/sdkconfig.bluetooth"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=/d' "$BOARD"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=/d' "$BOARD"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=/d' "$BOARD"
+          sed -i '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
 
-          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=/d' "$BOARD/sdkconfig.bluetooth"
-          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=/d' "$BOARD/sdkconfig.bluetooth"
-          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=/d' "$BOARD/sdkconfig.bluetooth"
+          cat >> "$BOARD" << 'EOF'
 
-          cat >> "$BOARD/sdkconfig.bluetooth" << 'EOF'
-
-          # HTTPS / SSL for MicroPython urequests
-          CONFIG_MBEDTLS_SSL_PROTO_TLS1_2=y
+          # HTTPS / TLS untuk TARS Cloud TTS
           CONFIG_MBEDTLS_SSL_ALPN=y
 
-          # Disable ESP-IDF certificate bundle.
-          # MicroPython SSL handles TLS directly.
-          CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+          # Certificate Bundle AKTIF
+          CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+          CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=n
+          CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+
+          # HTTPS client
+          CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
           EOF
 
-          echo "===== AFTER ====="
-          tail -n 20 "$BOARD/sdkconfig.bluetooth"
+          echo "===== TARS HTTPS CONFIG ====="
+          tail -n 20 "$BOARD"
 
       - name: Patch A2DP queue
         shell: bash
@@ -98,7 +99,6 @@ jobs:
         shell: bash
         run: |
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
-
           cd "$GITHUB_WORKSPACE/micropython"
 
           rm -rf ports/esp32/build-TARS_ESP32_A2DP
@@ -108,13 +108,13 @@ jobs:
             USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake" \
             2>&1 | tee "$GITHUB_WORKSPACE/tars_build.log"
 
-      - name: Show SSL configuration
+      - name: Show HTTPS configuration
         if: always()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
-          echo "===== SDKCONFIG SSL ====="
+          echo "===== MBEDTLS CONFIG ====="
 
           if [ -f "$BUILD/sdkconfig" ]; then
             grep -E \
