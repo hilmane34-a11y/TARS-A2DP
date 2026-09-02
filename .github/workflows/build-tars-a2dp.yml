@@ -9,96 +9,25 @@ jobs:
     timeout-minutes: 60
 
     steps:
-
-      - name: Checkout TARS repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install system packages
+      - name: Install packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            make \
-            gcc \
-            g++ \
-            cmake \
-            ninja-build \
-            python3 \
-            python3-pip \
-            flex \
-            bison \
-            gperf \
-            ccache \
-            libffi-dev \
-            libssl-dev \
-            dfu-util \
-            libusb-1.0-0
+          sudo apt-get install -y git make gcc g++ cmake ninja-build python3 python3-pip flex bison gperf ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
 
       - name: Clone MicroPython
         run: |
-          git clone \
-            --depth 1 \
-            https://github.com/micropython/micropython.git \
-            micropython
-
-      - name: Setup MicroPython submodules
-        run: |
+          git clone --depth 1 https://github.com/micropython/micropython.git micropython
           cd micropython
-          git submodule update \
-            --init \
-            --recursive \
-            --depth 1
+          git submodule update --init --recursive --depth 1
 
       - name: Clone ESP-IDF
         run: |
-          git clone \
-            --depth 1 \
-            --branch v5.5.2 \
-            https://github.com/espressif/esp-idf.git \
-            esp-idf
-
+          git clone --depth 1 --branch v5.5.2 https://github.com/espressif/esp-idf.git esp-idf
           cd esp-idf
-
-          git submodule update \
-            --init \
-            --recursive \
-            --filter=tree:0
-
-      - name: Patch A2DP source queue for lower RAM use
-        shell: bash
-        run: |
-          A2DP_FILE="$GITHUB_WORKSPACE/esp-idf/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_a2dp_source.c"
-
-          echo "=================================================="
-          echo "A2DP SOURCE QUEUE PATCH"
-          echo "=================================================="
-
-          echo "BEFORE PATCH:"
-          grep -n \
-            -E "BTC_MEDIA_AA_BUF_SIZE|MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE"
-
-          sed -i \
-            's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
-            "$A2DP_FILE"
-
-          echo ""
-          echo "AFTER PATCH:"
-          grep -n \
-            -E "BTC_MEDIA_AA_BUF_SIZE|MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE"
-
-          echo ""
-          echo "VERIFY PATCH RESULT:"
-
-          if grep -q \
-            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
-            "$A2DP_FILE"; then
-            echo "PATCH SUCCESS"
-          else
-            echo "PATCH FAILED"
-            exit 1
-          fi
+          git submodule update --init --recursive --filter=tree:0
 
       - name: Install ESP-IDF
         run: |
@@ -114,75 +43,60 @@ jobs:
         shell: bash
         run: |
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
-
           cd "$GITHUB_WORKSPACE/micropython"
-
           make -C ports/esp32 submodules
 
-      - name: Install TARS custom board
+      - name: Install TARS board
         shell: bash
         run: |
           BOARD_DIR="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP"
-
           mkdir -p "$BOARD_DIR"
 
-          cp \
-            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.h" \
-            "$BOARD_DIR/"
+          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.h" "$BOARD_DIR/"
+          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.cmake" "$BOARD_DIR/"
+          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" "$BOARD_DIR/"
+          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/partitions.csv" "$BOARD_DIR/"
 
-          cp \
-            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.cmake" \
-            "$BOARD_DIR/"
-
-          cp \
-            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" \
-            "$BOARD_DIR/"
-
-          cp \
-            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/partitions.csv" \
-            "$BOARD_DIR/"
-
-          echo "=================================================="
-          echo "TARS CUSTOM BOARD FILES"
-          echo "=================================================="
-
-          ls -la "$BOARD_DIR"
-
-          echo ""
-          echo "=================================================="
-          echo "MPCONFIGBOARD.H"
-          echo "=================================================="
-
-          cat "$BOARD_DIR/mpconfigboard.h"
-
-          echo ""
-          echo "=================================================="
-          echo "MPCONFIGBOARD.CMAKE"
-          echo "=================================================="
-
-          cat "$BOARD_DIR/mpconfigboard.cmake"
-
-          echo ""
-          echo "=================================================="
-          echo "SDKCONFIG BLUETOOTH"
-          echo "=================================================="
-
-          cat "$BOARD_DIR/sdkconfig.bluetooth"
-
-          echo ""
-          echo "=================================================="
-          echo "PARTITIONS.CSV"
-          echo "=================================================="
-
-          cat "$BOARD_DIR/partitions.csv"
-
-      - name: Build TARS MicroPython A2DP
-        id: build_tars
+      - name: Fix HTTPS SSL configuration
         shell: bash
-        continue-on-error: true
         run: |
-          set +e
+          BOARD="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP"
 
+          echo "===== BEFORE ====="
+          cat "$BOARD/sdkconfig.bluetooth"
+
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=/d' "$BOARD/sdkconfig.bluetooth"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=/d' "$BOARD/sdkconfig.bluetooth"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=/d' "$BOARD/sdkconfig.bluetooth"
+
+          cat >> "$BOARD/sdkconfig.bluetooth" << 'EOF'
+
+          # HTTPS / SSL for MicroPython urequests
+          CONFIG_MBEDTLS_SSL_PROTO_TLS1_2=y
+          CONFIG_MBEDTLS_SSL_ALPN=y
+
+          # Disable ESP-IDF certificate bundle.
+          # MicroPython SSL handles TLS directly.
+          CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+          EOF
+
+          echo "===== AFTER ====="
+          tail -n 20 "$BOARD/sdkconfig.bluetooth"
+
+      - name: Patch A2DP queue
+        shell: bash
+        run: |
+          A2DP_FILE="$GITHUB_WORKSPACE/esp-idf/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_a2dp_source.c"
+
+          if [ -f "$A2DP_FILE" ]; then
+            sed -i \
+              's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
+              "$A2DP_FILE"
+          fi
+
+      - name: Build TARS firmware
+        shell: bash
+        run: |
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
@@ -194,250 +108,25 @@ jobs:
             USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake" \
             2>&1 | tee "$GITHUB_WORKSPACE/tars_build.log"
 
-          BUILD_RESULT=${PIPESTATUS[0]}
-
-          echo "BUILD_EXIT_CODE=$BUILD_RESULT" >> "$GITHUB_ENV"
-
-          echo "=================================================="
-          echo "BUILD EXIT CODE: $BUILD_RESULT"
-          echo "=================================================="
-
-          exit 0
-
-      - name: Diagnose build
+      - name: Show SSL configuration
         if: always()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
-          FULL_LOG="$GITHUB_WORKSPACE/tars_build.log"
 
-          echo "=================================================="
-          echo "BUILD RESULT"
-          echo "=================================================="
-
-          echo "BUILD_EXIT_CODE=${BUILD_EXIT_CODE:-unknown}"
-
-          echo ""
-          echo "=================================================="
-          echo "FIRST BUILD ERRORS"
-          echo "=================================================="
-
-          if [ -f "$FULL_LOG" ]; then
-            grep -n -m 30 \
-              -E "fatal error:|error:|undefined reference|CMake Error|FAILED:|partition is too small|overflow" \
-              "$FULL_LOG" \
-              || true
-          else
-            echo "FULL BUILD LOG NOT FOUND"
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "CONTEXT AROUND FIRST ERROR"
-          echo "=================================================="
-
-          if [ -f "$FULL_LOG" ]; then
-            FIRST_LINE=$(
-              grep -n \
-                -E "fatal error:|error:|undefined reference|CMake Error|FAILED:|partition is too small|overflow" \
-                "$FULL_LOG" \
-                | head -n 1 \
-                | cut -d: -f1
-            )
-
-            if [ -n "$FIRST_LINE" ]; then
-              START=$((FIRST_LINE - 20))
-
-              if [ "$START" -lt 1 ]; then
-                START=1
-              fi
-
-              END=$((FIRST_LINE + 150))
-
-              sed -n "${START},${END}p" "$FULL_LOG"
-            else
-              echo "NO COMPILER ERROR PATTERN FOUND"
-            fi
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "CMAKE ERROR FULL DETAILS"
-          echo "=================================================="
-
-          if [ -f "$FULL_LOG" ]; then
-            grep -n \
-              -A 40 \
-              -B 10 \
-              "CMake Error at" \
-              "$FULL_LOG" \
-              || true
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "COMPONENT ERROR DETAILS"
-          echo "=================================================="
-
-          if [ -f "$FULL_LOG" ]; then
-            grep -n \
-              -A 20 \
-              -B 10 \
-              -E "component.cmake|Unknown component|Could not find component|requires component|REQUIRES|PRIV_REQUIRES|not found" \
-              "$FULL_LOG" \
-              || true
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "LAST 200 LINES OF BUILD"
-          echo "=================================================="
-
-          if [ -f "$FULL_LOG" ]; then
-            tail -n 200 "$FULL_LOG"
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "GENERATED PARTITION INFORMATION"
-          echo "=================================================="
-
-          find \
-            "$BUILD" \
-            -iname "*partition*" \
-            -type f \
-            -print \
-            2>/dev/null \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "GENERATED SDKCONFIG BLUETOOTH"
-          echo "=================================================="
+          echo "===== SDKCONFIG SSL ====="
 
           if [ -f "$BUILD/sdkconfig" ]; then
-            grep -n \
-              -E "^CONFIG_(BT|NIMBLE|BLE|PARTITION|MBEDTLS)" \
+            grep -E \
+              "CONFIG_MBEDTLS_SSL|CONFIG_MBEDTLS_CERTIFICATE|CONFIG_ESP_TLS" \
               "$BUILD/sdkconfig" \
               || true
-          else
-            echo "sdkconfig belum ditemukan"
           fi
 
-          echo ""
-          echo "=================================================="
-          echo "MODULEDEFS TARS CHECK"
-          echo "=================================================="
-
-          if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
-            grep -n \
-              -E "tars_a2dp|tars_bluetooth" \
-              "$BUILD/genhdr/moduledefs.collected" \
-              || true
-          else
-            echo "moduledefs.collected belum dibuat"
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "FIRMWARE SIZE"
-          echo "=================================================="
-
-          if [ -f "$BUILD/firmware.bin" ]; then
-            ls -lh "$BUILD/firmware.bin"
-          fi
-
-          if [ -f "$BUILD/micropython.bin" ]; then
-            ls -lh "$BUILD/micropython.bin"
-          fi
-
-          echo ""
-          echo "=================================================="
-          echo "BUILD DIRECTORY STATUS"
-          echo "=================================================="
-
-          if [ -d "$BUILD" ]; then
-            find \
-              "$BUILD" \
-              -maxdepth 2 \
-              -type f \
-              | head -n 100
-          else
-            echo "Build directory belum ada"
-          fi
-
-      - name: Upload diagnostic logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: TARS-Build-Diagnostic
-          path: |
-            tars_build.log
-            micropython/ports/esp32/build-TARS_ESP32_A2DP/log/
-            micropython/ports/esp32/build-TARS_ESP32_A2DP/sdkconfig
-          if-no-files-found: warn
-
-      - name: Fail workflow if build failed
-        if: always()
-        shell: bash
-        run: |
-          echo "=================================================="
-          echo "FINAL BUILD STATUS"
-          echo "=================================================="
-
-          echo "BUILD_EXIT_CODE=${BUILD_EXIT_CODE:-unknown}"
-
-          if [ "${BUILD_EXIT_CODE:-1}" != "0" ]; then
-            echo ""
-            echo "TARS BUILD FAILED"
-            echo ""
-            echo "PERIKSA BAGIAN:"
-            echo "FIRST BUILD ERRORS"
-            echo "CONTEXT AROUND FIRST ERROR"
-            echo "CMAKE ERROR FULL DETAILS"
-            echo "COMPONENT ERROR DETAILS"
-            echo "LAST 200 LINES OF BUILD"
-
-            exit 1
-          fi
-
-          echo ""
-          echo "TARS BUILD SUCCESS"
-
-      - name: Verify TARS modules
-        if: success()
-        shell: bash
-        run: |
-          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
-
-          echo "=================================================="
-          echo "CHECK FIRMWARE"
-          echo "=================================================="
-
-          ls -lh "$BUILD/firmware.bin"
-
-          echo ""
-          echo "=================================================="
-          echo "MODULEDEFS.COLLECTED TARS"
-          echo "=================================================="
-
-          grep -n \
-            -E "tars_a2dp|tars_bluetooth" \
-            "$BUILD/genhdr/moduledefs.collected" \
-            || true
-
-          echo ""
-          echo "=================================================="
-          echo "MODULEDEFS.H TARS"
-          echo "=================================================="
-
-          grep -n \
-            -E "TARS_A2DP|TARS_BLUETOOTH|tars_a2dp|tars_bluetooth" \
-            "$BUILD/genhdr/moduledefs.h" \
-            || true
+          echo "===== LAST BUILD LOG ====="
+          tail -n 100 "$GITHUB_WORKSPACE/tars_build.log" || true
 
       - name: Prepare firmware
-        if: success()
         shell: bash
         run: |
           mkdir -p output
@@ -446,16 +135,18 @@ jobs:
             "$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP/firmware.bin" \
             "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP.bin"
 
-          echo "=================================================="
-          echo "OUTPUT FIRMWARE"
-          echo "=================================================="
-
-          ls -lh "$GITHUB_WORKSPACE/output"
+          ls -lh output/
 
       - name: Upload firmware
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TARS-MicroPython-ESP32-A2DP
           path: output/TARS-MicroPython-ESP32-A2DP.bin
-          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TARS-Build-Log
+          path: tars_build.log
+          if-no-files-found: warn
