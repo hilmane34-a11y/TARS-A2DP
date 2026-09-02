@@ -263,20 +263,79 @@ jobs:
             2>&1 | tee \
             "$GITHUB_WORKSPACE/tars_build.log"
 
-      - name: Diagnose HTTPS build
+      - name: Diagnose HTTPS and mbedTLS build
         if: always()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
           echo "========================================"
-          echo "FINAL SDKCONFIG HTTPS"
+          echo "FINAL SDKCONFIG HTTPS / TLS / CRYPTO"
           echo "========================================"
 
           if [ -f "$BUILD/sdkconfig" ]; then
 
+            echo ""
+            echo "----- ESP TLS -----"
+
             grep -n \
-              -E "CONFIG_ESP_TLS|CONFIG_MBEDTLS_SSL|CONFIG_MBEDTLS_CERTIFICATE" \
+              -E "^(CONFIG_ESP_TLS|# CONFIG_ESP_TLS)" \
+              "$BUILD/sdkconfig" \
+              || true
+
+            echo ""
+            echo "----- CERTIFICATE BUNDLE -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_CERTIFICATE|# CONFIG_MBEDTLS_CERTIFICATE)" \
+              "$BUILD/sdkconfig" \
+              || true
+
+            echo ""
+            echo "----- SSL / TLS -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_SSL|# CONFIG_MBEDTLS_SSL|CONFIG_MBEDTLS_TLS|# CONFIG_MBEDTLS_TLS)" \
+              "$BUILD/sdkconfig" \
+              || true
+
+            echo ""
+            echo "----- KEY EXCHANGE -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_KEY_EXCHANGE|# CONFIG_MBEDTLS_KEY_EXCHANGE)" \
+              "$BUILD/sdkconfig" \
+              || true
+
+            echo ""
+            echo "----- RSA / ECDSA / ECDH / ECP -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_(RSA|ECDSA|ECDH|ECP)|# CONFIG_MBEDTLS_(RSA|ECDSA|ECDH|ECP))" \
+              "$BUILD/sdkconfig" \
+              || true
+
+            echo ""
+            echo "----- X509 / PK / ASN1 -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_(X509|PK_|ASN1)|# CONFIG_MBEDTLS_(X509|PK_|ASN1))" \
+              "$BUILD/sdkconfig" \
+              || true
+
+            echo ""
+            echo "----- HASH -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_(SHA|MD5)|# CONFIG_MBEDTLS_(SHA|MD5))" \
+              "$BUILD/sdkconfig" \
+              || true
+
+            echo ""
+            echo "----- ENTIRE MBEDTLS CONFIG -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_|# CONFIG_MBEDTLS_)" \
               "$BUILD/sdkconfig" \
               || true
 
@@ -287,7 +346,6 @@ jobs:
           fi
 
           echo ""
-
           echo "========================================"
           echo "TARS MODULE CHECK"
           echo "========================================"
@@ -306,7 +364,6 @@ jobs:
           fi
 
           echo ""
-
           echo "========================================"
           echo "FIRMWARE CHECK"
           echo "========================================"
@@ -322,7 +379,6 @@ jobs:
           fi
 
           echo ""
-
           echo "========================================"
           echo "LAST BUILD LOG"
           echo "========================================"
