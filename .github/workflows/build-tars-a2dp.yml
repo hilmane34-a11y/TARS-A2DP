@@ -9,25 +9,47 @@ jobs:
     timeout-minutes: 60
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make gcc g++ cmake ninja-build python3 python3-pip flex bison gperf ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+          sudo apt-get install -y \
+            git make gcc g++ cmake ninja-build \
+            python3 python3-pip \
+            flex bison gperf ccache \
+            libffi-dev libssl-dev \
+            dfu-util libusb-1.0-0
 
       - name: Clone MicroPython
         run: |
-          git clone --depth 1 https://github.com/micropython/micropython.git micropython
+          git clone --depth 1 \
+            https://github.com/micropython/micropython.git \
+            micropython
+
           cd micropython
-          git submodule update --init --recursive --depth 1
+
+          git submodule update \
+            --init \
+            --recursive \
+            --depth 1
 
       - name: Clone ESP-IDF
         run: |
-          git clone --depth 1 --branch v5.5.2 https://github.com/espressif/esp-idf.git esp-idf
+          git clone \
+            --depth 1 \
+            --branch v5.5.2 \
+            https://github.com/espressif/esp-idf.git \
+            esp-idf
+
           cd esp-idf
-          git submodule update --init --recursive --filter=tree:0
+
+          git submodule update \
+            --init \
+            --recursive \
+            --filter=tree:0
 
       - name: Install ESP-IDF
         run: |
@@ -43,7 +65,9 @@ jobs:
         shell: bash
         run: |
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
+
           cd "$GITHUB_WORKSPACE/micropython"
+
           make -C ports/esp32 submodules
 
       - name: Install TARS board
@@ -53,14 +77,26 @@ jobs:
 
           mkdir -p "$BOARD_DIR"
 
-          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.h" "$BOARD_DIR/"
-          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.cmake" "$BOARD_DIR/"
-          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" "$BOARD_DIR/"
-          cp "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/partitions.csv" "$BOARD_DIR/"
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.h" \
+            "$BOARD_DIR/"
+
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.cmake" \
+            "$BOARD_DIR/"
+
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" \
+            "$BOARD_DIR/"
+
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/partitions.csv" \
+            "$BOARD_DIR/"
 
           echo "========================================"
           echo "TARS BOARD INSTALLED"
           echo "========================================"
+
           ls -la "$BOARD_DIR"
 
       - name: Enable HTTPS Certificate Bundle
@@ -103,16 +139,16 @@ jobs:
           echo "SEARCHING REQUESTS SOURCES"
           echo "========================================"
 
-          if [ -f "$UREQ" ]; then
-            echo "$UREQ"
-          else
-            echo "NOT FOUND: $UREQ"
-          fi
-
           if [ -f "$REQ" ]; then
             echo "$REQ"
           else
             echo "NOT FOUND: $REQ"
+          fi
+
+          if [ -f "$UREQ" ]; then
+            echo "$UREQ"
+          else
+            echo "NOT FOUND: $UREQ"
           fi
 
           echo ""
@@ -121,7 +157,7 @@ jobs:
           echo "========================================"
 
           grep -n \
-            -E "import tls|from tls|SSLContext|PROTOCOL_TLS" \
+            -E "import tls|import ssl|from tls|from ssl|SSLContext|PROTOCOL_TLS" \
             "$REQ" "$UREQ" \
             2>/dev/null || true
 
@@ -130,21 +166,16 @@ jobs:
           echo "PATCHING HTTPS BACKEND"
           echo "========================================"
 
-          for FILE in "$REQ" "$UREQ"; do
-            if [ -f "$FILE" ]; then
-              echo "PATCHING: $FILE"
+          if [ ! -f "$REQ" ]; then
+            echo "ERROR: REQUESTS FILE NOT FOUND"
+            exit 1
+          fi
 
-              sed -i \
-                's/^import tls$/import ssl as tls/' \
-                "$FILE"
+          sed -i -E \
+            's/^([[:space:]]*)import[[:space:]]+tls[[:space:]]*$/\1import ssl as tls/' \
+            "$REQ"
 
-              sed -i \
-                's/^import ssl$/import ssl as tls/' \
-                "$FILE"
-
-              echo "PATCH DONE: $FILE"
-            fi
-          done
+          echo "REQUESTS PATCHED"
 
           echo ""
           echo "========================================"
@@ -152,32 +183,34 @@ jobs:
           echo "========================================"
 
           grep -n \
-            -E "import ssl|import tls|from ssl|from tls|SSLContext|PROTOCOL_TLS" \
+            -E "import tls|import ssl|from tls|from ssl|SSLContext|PROTOCOL_TLS" \
             "$REQ" "$UREQ" \
             2>/dev/null || true
 
           echo ""
           echo "========================================"
-          echo "VERIFY REQUESTS IMPORT"
+          echo "VERIFY REQUESTS PATCH"
           echo "========================================"
 
-          if [ -f "$REQ" ]; then
-            grep -n \
-              -E "^import ssl as tls$|^import tls$" \
-              "$REQ" \
-              || true
+          if grep -q -E \
+            "^[[:space:]]*import[[:space:]]+tls[[:space:]]*$" \
+            "$REQ"; then
+
+            echo "ERROR: ORIGINAL TLS IMPORT STILL EXISTS"
+            exit 1
           fi
 
-          echo ""
-          echo "========================================"
-          echo "VERIFY UREQUESTS IMPORT"
-          echo "========================================"
+          if grep -q -E \
+            "^[[:space:]]*import[[:space:]]+ssl[[:space:]]+as[[:space:]]+tls" \
+            "$REQ"; then
 
-          if [ -f "$UREQ" ]; then
-            grep -n \
-              -E "^import ssl as tls$|^import tls$" \
-              "$UREQ" \
-              || true
+            echo "PATCH SUCCESS: REQUESTS NOW USES SSL BACKEND"
+
+          else
+
+            echo "ERROR: SSL PATCH NOT FOUND"
+            exit 1
+
           fi
 
       - name: Patch A2DP queue
@@ -189,29 +222,30 @@ jobs:
           echo "PATCH A2DP QUEUE"
           echo "========================================"
 
-          if [ -f "$A2DP_FILE" ]; then
-
-            echo "BEFORE:"
-            grep -n \
-              "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-              "$A2DP_FILE" \
-              || true
-
-            sed -i \
-              's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
-              "$A2DP_FILE"
-
-            echo ""
-            echo "AFTER:"
-            grep -n \
-              "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-              "$A2DP_FILE" \
-              || true
-
-          else
-            echo "A2DP FILE NOT FOUND"
+          if [ ! -f "$A2DP_FILE" ]; then
+            echo "ERROR: A2DP FILE NOT FOUND"
             exit 1
           fi
+
+          echo "BEFORE PATCH:"
+
+          grep -n \
+            "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
+            "$A2DP_FILE" \
+            || true
+
+          sed -i \
+            's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
+            "$A2DP_FILE"
+
+          echo ""
+
+          echo "AFTER PATCH:"
+
+          grep -n \
+            "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
+            "$A2DP_FILE" \
+            || true
 
       - name: Build TARS firmware
         shell: bash
@@ -220,12 +254,14 @@ jobs:
 
           cd "$GITHUB_WORKSPACE/micropython"
 
-          rm -rf ports/esp32/build-TARS_ESP32_A2DP
+          rm -rf \
+            ports/esp32/build-TARS_ESP32_A2DP
 
           make -C ports/esp32 \
             BOARD=TARS_ESP32_A2DP \
             USER_C_MODULES="$GITHUB_WORKSPACE/modules/micropython.cmake" \
-            2>&1 | tee "$GITHUB_WORKSPACE/tars_build.log"
+            2>&1 | tee \
+            "$GITHUB_WORKSPACE/tars_build.log"
 
       - name: Diagnose HTTPS build
         if: always()
@@ -245,10 +281,13 @@ jobs:
               || true
 
           else
+
             echo "SDKCONFIG NOT FOUND"
+
           fi
 
           echo ""
+
           echo "========================================"
           echo "TARS MODULE CHECK"
           echo "========================================"
@@ -261,21 +300,29 @@ jobs:
               || true
 
           else
+
             echo "MODULEDEFS NOT FOUND"
+
           fi
 
           echo ""
+
           echo "========================================"
           echo "FIRMWARE CHECK"
           echo "========================================"
 
           if [ -f "$BUILD/firmware.bin" ]; then
+
             ls -lh "$BUILD/firmware.bin"
+
           else
+
             echo "FIRMWARE NOT FOUND"
+
           fi
 
           echo ""
+
           echo "========================================"
           echo "LAST BUILD LOG"
           echo "========================================"
@@ -289,6 +336,11 @@ jobs:
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
+          if [ ! -f "$BUILD/firmware.bin" ]; then
+            echo "ERROR: FIRMWARE.BIN NOT FOUND"
+            exit 1
+          fi
+
           mkdir -p "$GITHUB_WORKSPACE/output"
 
           cp \
@@ -299,7 +351,8 @@ jobs:
           echo "OUTPUT FIRMWARE"
           echo "========================================"
 
-          ls -lh "$GITHUB_WORKSPACE/output"
+          ls -lh \
+            "$GITHUB_WORKSPACE/output"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
