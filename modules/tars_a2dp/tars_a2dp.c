@@ -57,7 +57,11 @@
 #define TARS_TTS_SOURCE_RATE 24000
 
 /* PENTING: JANGAN ADA ":" DI DEPAN HOSTNAME */
-#define TARS_CLOUD_TTS_URL "https://tars-cloud-v3.hilmane34.workers.dev/tts"
+#define TARS_CLOUD_TTS_HOST "tars-cloud-v3.hilmane34.workers.dev"
+#define TARS_CLOUD_TTS_PATH "/tts"
+
+#define TARS_CLOUD_TTS_URL \
+    "https://tars-cloud-v3.hilmane34.workers.dev/tts"
 
 #define TARS_TTS_MAX_TEXT_LENGTH 30
 
