@@ -1905,26 +1905,35 @@ tars_a2dp_tts_download(
 
     esp_http_client_config_t config = {
 
-        .url =
-            TARS_CLOUD_TTS_URL,
+    .host =
+        TARS_CLOUD_TTS_HOST,
 
-        .method =
-            HTTP_METHOD_POST,
+    .path =
+        TARS_CLOUD_TTS_PATH,
 
-        .event_handler =
-            tars_tts_http_event,
+    .port =
+        TARS_CLOUD_TTS_PORT,
 
-        .timeout_ms =
-            15000,
+    .transport_type =
+        HTTP_TRANSPORT_OVER_SSL,
 
-        .buffer_size =
-            TARS_HTTP_BUFFER_SIZE,
+    .method =
+        HTTP_METHOD_POST,
 
-        .buffer_size_tx =
-            TARS_HTTP_BUFFER_SIZE,
+    .event_handler =
+        tars_tts_http_event,
 
-        .crt_bundle_attach =
-            esp_crt_bundle_attach
+    .timeout_ms =
+        15000,
+
+    .buffer_size =
+        TARS_HTTP_BUFFER_SIZE,
+
+    .buffer_size_tx =
+        TARS_HTTP_BUFFER_SIZE,
+
+    .crt_bundle_attach =
+        esp_crt_bundle_attach
     };
 
 
