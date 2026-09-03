@@ -41,24 +41,6 @@
    16 BIT
    24000 Hz
    MONO
-
-   AUDIO ALUR:
-
-   Cloudflare Worker
-          ↓
-   RAW PCM AUDIO
-          ↓
-   FLASH "ttsdata"
-          ↓
-   WIFI OFF
-          ↓
-   BLUETOOTH ON
-          ↓
-   I7-TWS
-          ↓
-   AUDIO
-
-   AUDIO TIDAK DISIMPAN PENUH DI RAM.
    ========================================================= */
 
 
@@ -146,6 +128,19 @@ static uint64_t tars_tts_resample_phase = 0;
 
 
 /* =========================================================
+   TTS DEBUG STATE
+   ========================================================= */
+
+static int16_t tars_tts_debug_first_sample = 0;
+static int16_t tars_tts_debug_min_sample = 0;
+static int16_t tars_tts_debug_max_sample = 0;
+
+static size_t tars_tts_debug_sample_count = 0;
+
+static bool tars_tts_debug_valid = false;
+
+
+/* =========================================================
    FLASH READ BUFFER
    ========================================================= */
 
@@ -197,6 +192,25 @@ tars_find_tts_partition(void)
     }
 
     return true;
+}
+
+
+/* =========================================================
+   RESET TTS DEBUG
+   ========================================================= */
+
+static void
+tars_reset_tts_debug(void)
+{
+    tars_tts_debug_first_sample = 0;
+
+    tars_tts_debug_min_sample = 0;
+
+    tars_tts_debug_max_sample = 0;
+
+    tars_tts_debug_sample_count = 0;
+
+    tars_tts_debug_valid = false;
 }
 
 
@@ -397,6 +411,50 @@ tars_read_pcm_sample(
     *sample =
         (int16_t)value;
 
+
+    /* =====================================================
+       TTS PCM DEBUG
+       ===================================================== */
+
+    if (!tars_tts_debug_valid) {
+
+        tars_tts_debug_first_sample =
+            *sample;
+
+        tars_tts_debug_min_sample =
+            *sample;
+
+        tars_tts_debug_max_sample =
+            *sample;
+
+        tars_tts_debug_valid =
+            true;
+    }
+    else {
+
+        if (
+            *sample <
+            tars_tts_debug_min_sample
+        ) {
+
+            tars_tts_debug_min_sample =
+                *sample;
+        }
+
+        if (
+            *sample >
+            tars_tts_debug_max_sample
+        ) {
+
+            tars_tts_debug_max_sample =
+                *sample;
+        }
+    }
+
+
+    tars_tts_debug_sample_count++;
+
+
     return true;
 }
 
@@ -540,6 +598,7 @@ tars_tts_http_event(
         }
 
         if (!tars_find_tts_partition()) {
+
             tars_tts_error =
                 "TTS FLASH PARTITION NOT FOUND";
 
@@ -1966,6 +2025,8 @@ tars_a2dp_tts_download(
 
     tars_clear_tts_state();
 
+    tars_reset_tts_debug();
+
     tars_tts_error =
         "";
 
@@ -2024,28 +2085,18 @@ tars_a2dp_tts_download(
 
     /* =====================================================
        HTTP CONFIG
-
-       WORKER:
-
-       https://tars-cloud-v3.hilmane34.workers.dev/tts
-
-       REQUEST:
-
-       POST /tts
-
-       BODY:
-
-       {"text":"Halo TARS"}
-
-       RESPONSE:
-
-       RAW PCM AUDIO
-    ===================================================== */
+       ===================================================== */
 
     esp_http_client_config_t config = {
 
-        .url =
-    "https://tars-cloud-v3.hilmane34.workers.dev/tts",
+        .host =
+            TARS_CLOUD_TTS_HOST,
+
+        .path =
+            TARS_CLOUD_TTS_PATH,
+
+        .port =
+            TARS_CLOUD_TTS_PORT,
 
         .transport_type =
             HTTP_TRANSPORT_OVER_SSL,
@@ -2279,7 +2330,6 @@ tars_a2dp_tts_download(
 
     /* =====================================================
        PCM 16 BIT
-       Pastikan jumlah byte genap
        ===================================================== */
 
     tars_tts_flash_size =
@@ -2427,6 +2477,8 @@ tars_a2dp_tts_play(void)
         false;
 
     tars_clear_tts_play_state();
+
+    tars_reset_tts_debug();
 
     tars_tts_playing =
         true;
@@ -2817,6 +2869,68 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 
 /* =========================================================
+   TTS DEBUG
+   ========================================================= */
+
+static mp_obj_t
+tars_a2dp_tts_debug(void)
+{
+    char result[220];
+
+    snprintf(
+        result,
+        sizeof(result),
+
+        "TTS DEBUG | "
+        "VALID: %s | "
+        "FIRST: %d | "
+        "MIN: %d | "
+        "MAX: %d | "
+        "SAMPLES READ: %u | "
+        "SOURCE RATE: %u | "
+        "A2DP RATE: %u",
+
+        tars_tts_debug_valid
+        ?
+        "YES"
+        :
+        "NO",
+
+        (int)
+        tars_tts_debug_first_sample,
+
+        (int)
+        tars_tts_debug_min_sample,
+
+        (int)
+        tars_tts_debug_max_sample,
+
+        (unsigned int)
+        tars_tts_debug_sample_count,
+
+        (unsigned int)
+        TARS_TTS_SOURCE_RATE,
+
+        (unsigned int)
+        TARS_SAMPLE_RATE
+    );
+
+    return mp_obj_new_str(
+        result,
+        strlen(
+            result
+        )
+    );
+}
+
+
+static MP_DEFINE_CONST_FUN_OBJ_0(
+    tars_a2dp_tts_debug_obj,
+    tars_a2dp_tts_debug
+);
+
+
+/* =========================================================
    MODULE FUNCTIONS
    ========================================================= */
 
@@ -2940,6 +3054,16 @@ tars_a2dp_globals_table[] =
 
         MP_ROM_PTR(
             &tars_a2dp_tts_info_obj
+        )
+    },
+
+    {
+        MP_ROM_QSTR(
+            MP_QSTR_tts_debug
+        ),
+
+        MP_ROM_PTR(
+            &tars_a2dp_tts_debug_obj
         )
     }
 };
