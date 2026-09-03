@@ -70,9 +70,9 @@ jobs:
 
           make -C ports/esp32 submodules
 
-      -  name: Apply esp32_rmt.c fix
-         shell: bash
-         run: |
+      - name: Apply esp32_rmt.c fix
+        shell: bash
+        run: |
           RMT_FILE="$GITHUB_WORKSPACE/micropython/ports/esp32/esp32_rmt.c"
           
           echo "========================================"
@@ -91,7 +91,7 @@ jobs:
           
           # Verify the patch
           grep -n "resolution_hz" "$RMT_FILE" | head -5
-      
+
       - name: Install TARS board
         shell: bash
         run: |
