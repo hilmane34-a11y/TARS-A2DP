@@ -18,6 +18,7 @@
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
 
+
 /* =========================================================
    TARS V1 MANZ
 
@@ -25,17 +26,33 @@
    BLUETOOTH CLASSIC A2DP SOURCE
    CLOUDFLARE TTS
 
+   WORKER:
+   https://tars-cloud-v3.hilmane34.workers.dev/tts
+
+   REQUEST:
+   POST /tts
+   Content-Type: application/json
+
+   BODY:
+   {"text":"Halo TARS"}
+
    RESPONSE:
    RAW PCM
    16 BIT
-   44100 Hz
+   24000 Hz
    MONO
+   ========================================================= */
+
+
+/* =========================================================
+   SETTINGS
    ========================================================= */
 
 #define TARS_DEVICE_NAME "TARS V1 MANZ"
 #define TARS_TARGET_NAME "I7-TWS"
 
 #define TARS_SAMPLE_RATE 44100
+#define TARS_TTS_SOURCE_RATE 24000
 
 #define TARS_CLOUD_TTS_HOST "tars-cloud-v3.hilmane34.workers.dev"
 #define TARS_CLOUD_TTS_PATH "/tts"
@@ -50,6 +67,7 @@
 
 #define TARS_TTS_HEADER_DEBUG_SIZE 16
 
+
 /* =========================================================
    MODE STATE
    ========================================================= */
@@ -57,6 +75,7 @@
 static bool tars_bt_started = false;
 static bool tars_bt_stopping = false;
 static volatile bool tars_tts_loading = false;
+
 
 /* =========================================================
    BLUETOOTH STATE
@@ -68,6 +87,7 @@ static bool tars_a2dp_connected = false;
 static bool tars_a2dp_connecting = false;
 static bool tars_audio_started = false;
 
+
 /* =========================================================
    MEDIA CONTROL STATE
    ========================================================= */
@@ -77,11 +97,13 @@ static bool tars_media_start_requested = false;
 static bool tars_media_start_pending = false;
 static bool tars_media_stop_pending = false;
 
+
 /* =========================================================
    TARGET BLUETOOTH ADDRESS
    ========================================================= */
 
 static esp_bd_addr_t tars_target_bda = {0};
+
 
 /* =========================================================
    INTERNAL TONE
@@ -90,6 +112,7 @@ static esp_bd_addr_t tars_target_bda = {0};
 static bool tars_tone_enabled = false;
 static uint32_t tars_tone_phase = 0;
 static uint32_t tars_tone_frequency = 440;
+
 
 /* =========================================================
    TTS FLASH STATE
@@ -103,6 +126,9 @@ static volatile size_t tars_tts_read_pos = 0;
 static volatile bool tars_tts_playing = false;
 static bool tars_tts_ready = false;
 
+static uint64_t tars_tts_resample_phase = 0;
+
+
 /* =========================================================
    TTS DEBUG STATE
    ========================================================= */
@@ -115,6 +141,7 @@ static size_t tars_tts_debug_sample_count = 0;
 
 static bool tars_tts_debug_valid = false;
 
+
 /* =========================================================
    TTS HEADER DEBUG STATE
    ========================================================= */
@@ -124,6 +151,7 @@ static uint8_t tars_tts_header_debug[
 ];
 
 static size_t tars_tts_header_debug_size = 0;
+
 
 /* =========================================================
    FLASH READ BUFFER
@@ -135,17 +163,20 @@ tars_flash_read_buffer[TARS_FLASH_READ_BUFFER_SIZE];
 static size_t tars_flash_buffer_start = 0;
 static size_t tars_flash_buffer_length = 0;
 
+
 /* =========================================================
    ERROR
    ========================================================= */
 
 static const char *tars_tts_error = "";
 
+
 /* =========================================================
    STATUS
    ========================================================= */
 
 static const char *tars_status_text = "TARS READY";
+
 
 /* =========================================================
    FIND TTS FLASH PARTITION
@@ -176,6 +207,7 @@ tars_find_tts_partition(void)
     return true;
 }
 
+
 /* =========================================================
    RESET TTS DEBUG
    ========================================================= */
@@ -184,9 +216,13 @@ static void
 tars_reset_tts_debug(void)
 {
     tars_tts_debug_first_sample = 0;
+
     tars_tts_debug_min_sample = 0;
+
     tars_tts_debug_max_sample = 0;
+
     tars_tts_debug_sample_count = 0;
+
     tars_tts_debug_valid = false;
 
     memset(
@@ -198,6 +234,7 @@ tars_reset_tts_debug(void)
     tars_tts_header_debug_size = 0;
 }
 
+
 /* =========================================================
    CLEAR PLAY STATE
    ========================================================= */
@@ -207,11 +244,15 @@ tars_clear_tts_play_state(void)
 {
     tars_tts_read_pos = 0;
 
+    tars_tts_resample_phase = 0;
+
     tars_flash_buffer_start = 0;
+
     tars_flash_buffer_length = 0;
 
     tars_tts_playing = false;
 }
+
 
 /* =========================================================
    CLEAR FULL TTS STATE
@@ -221,14 +262,20 @@ static void
 tars_clear_tts_state(void)
 {
     tars_tts_flash_size = 0;
+
     tars_tts_read_pos = 0;
 
+    tars_tts_resample_phase = 0;
+
     tars_flash_buffer_start = 0;
+
     tars_flash_buffer_length = 0;
 
     tars_tts_ready = false;
+
     tars_tts_playing = false;
 }
+
 
 /* =========================================================
    ERASE TTS FLASH
@@ -258,6 +305,7 @@ tars_erase_tts_flash(void)
 
     return true;
 }
+
 
 /* =========================================================
    LOAD FLASH BUFFER
@@ -314,6 +362,7 @@ tars_load_flash_buffer(size_t position)
 
     return true;
 }
+
 
 /* =========================================================
    READ PCM SAMPLE
@@ -383,6 +432,11 @@ tars_read_pcm_sample(
     *sample =
         (int16_t)value;
 
+
+    /* =====================================================
+       TTS PCM DEBUG
+       ===================================================== */
+
     if (!tars_tts_debug_valid) {
 
         tars_tts_debug_first_sample =
@@ -418,10 +472,13 @@ tars_read_pcm_sample(
         }
     }
 
+
     tars_tts_debug_sample_count++;
+
 
     return true;
 }
+
 
 /* =========================================================
    GENERATE INTERNAL TONE
@@ -511,6 +568,7 @@ tars_generate_tone(
     return usable_len;
 }
 
+
 /* =========================================================
    HTTP RECEIVE CALLBACK
    RAW AUDIO LANGSUNG KE FLASH
@@ -534,12 +592,14 @@ tars_tts_http_event(
 
         break;
 
+
     case HTTP_EVENT_HEADERS_SENT:
 
         tars_status_text =
             "TTS REQUEST SENT";
 
         break;
+
 
     case HTTP_EVENT_ON_DATA:
     {
@@ -549,6 +609,13 @@ tars_tts_http_event(
         ) {
             return ESP_OK;
         }
+
+
+        /* =============================================
+           TTS HEADER DEBUG
+
+           SIMPAN BYTE PERTAMA RESPONSE
+           ============================================= */
 
         if (
             tars_tts_header_debug_size <
@@ -574,13 +641,16 @@ tars_tts_http_event(
             memcpy(
                 tars_tts_header_debug +
                 tars_tts_header_debug_size,
+
                 evt->data,
+
                 copy_length
             );
 
             tars_tts_header_debug_size +=
                 copy_length;
         }
+
 
         if (tars_bt_started) {
 
@@ -636,6 +706,7 @@ tars_tts_http_event(
         break;
     }
 
+
     case HTTP_EVENT_ON_FINISH:
 
         tars_status_text =
@@ -643,9 +714,11 @@ tars_tts_http_event(
 
         break;
 
+
     case HTTP_EVENT_DISCONNECTED:
 
         break;
+
 
     default:
 
@@ -654,6 +727,7 @@ tars_tts_http_event(
 
     return ESP_OK;
 }
+
 
 /* =========================================================
    JSON ESCAPE
@@ -774,20 +848,12 @@ tars_json_escape(
     return result;
 }
 
+
 /* =========================================================
    A2DP AUDIO CALLBACK
 
-   PCM FLASH:
-   16 BIT
-   44100 Hz
-   MONO
-
-   OUTPUT:
-   16 BIT
-   44100 Hz
-   STEREO
-
    PRIORITAS:
+
    1. TTS FLASH
    2. TONE
    3. SILENCE
@@ -821,10 +887,9 @@ tars_a2dp_data_callback(
         return usable_len;
     }
 
+
     /* =====================================================
        TTS FLASH
-       TANPA RESAMPLING
-       44100 Hz MONO -> 44100 Hz STEREO
        ===================================================== */
 
     if (
@@ -835,17 +900,44 @@ tars_a2dp_data_callback(
 
         int32_t position = 0;
 
+        const uint64_t
+        phase_increment =
+            (
+                (
+                    (uint64_t)
+                    TARS_TTS_SOURCE_RATE
+                    << 32
+                )
+                /
+                TARS_SAMPLE_RATE
+            );
+
         while (
             position <
             usable_len
         ) {
+
+            size_t source_sample =
+                (size_t)
+                (
+                    tars_tts_resample_phase
+                    >>
+                    32
+                );
+
+            size_t source_offset =
+                source_sample *
+                2;
+
+            tars_tts_read_pos =
+                source_offset;
 
             int16_t sample =
                 0;
 
             if (
                 !tars_read_pcm_sample(
-                    tars_tts_read_pos,
+                    source_offset,
                     &sample
                 )
             ) {
@@ -868,6 +960,7 @@ tars_a2dp_data_callback(
 
                 break;
             }
+
 
             /* MONO -> STEREO */
 
@@ -895,12 +988,13 @@ tars_a2dp_data_callback(
 
             position += 4;
 
-            /* MAJU LANGSUNG 1 SAMPLE MONO */
-            tars_tts_read_pos += 2;
+            tars_tts_resample_phase +=
+                phase_increment;
         }
 
         return usable_len;
     }
+
 
     /* =====================================================
        INTERNAL TONE
@@ -915,6 +1009,7 @@ tars_a2dp_data_callback(
             );
     }
 
+
     /* =====================================================
        SILENCE
        ===================================================== */
@@ -927,6 +1022,7 @@ tars_a2dp_data_callback(
 
     return usable_len;
 }
+
 
 /* =========================================================
    REQUEST AUDIO START
@@ -982,6 +1078,7 @@ tars_request_audio_start(void)
     return ret;
 }
 
+
 /* =========================================================
    REQUEST AUDIO STOP
    ========================================================= */
@@ -1017,6 +1114,7 @@ tars_request_audio_stop(void)
 
     return ret;
 }
+
 
 /* =========================================================
    A2DP EVENT CALLBACK
@@ -1077,6 +1175,7 @@ tars_a2dp_event_callback(
 
             break;
 
+
         case ESP_A2D_CONNECTION_STATE_CONNECTING:
 
             tars_a2dp_connected =
@@ -1092,6 +1191,7 @@ tars_a2dp_event_callback(
                 "A2DP CONNECTING";
 
             break;
+
 
         case ESP_A2D_CONNECTION_STATE_CONNECTED:
 
@@ -1109,12 +1209,14 @@ tars_a2dp_event_callback(
 
             break;
 
+
         default:
 
             break;
         }
 
         break;
+
 
     case ESP_A2D_AUDIO_STATE_EVT:
 
@@ -1152,6 +1254,7 @@ tars_a2dp_event_callback(
 
             break;
 
+
         case ESP_A2D_AUDIO_STATE_STOPPED:
 
             tars_audio_started =
@@ -1180,12 +1283,14 @@ tars_a2dp_event_callback(
 
             break;
 
+
         default:
 
             break;
         }
 
         break;
+
 
     case ESP_A2D_MEDIA_CTRL_ACK_EVT:
 
@@ -1228,11 +1333,13 @@ tars_a2dp_event_callback(
 
         break;
 
+
     default:
 
         break;
     }
 }
+
 
 /* =========================================================
    BLUETOOTH GAP CALLBACK
@@ -1344,6 +1451,7 @@ tars_gap_callback(
         break;
     }
 
+
     case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
 
         if (
@@ -1357,11 +1465,13 @@ tars_gap_callback(
 
         break;
 
+
     default:
 
         break;
     }
 }
+
 
 /* =========================================================
    RESET BLUETOOTH STATE
@@ -1409,6 +1519,7 @@ tars_reset_bluetooth_state(void)
         ESP_BD_ADDR_LEN
     );
 }
+
 
 /* =========================================================
    START BLUETOOTH
@@ -1640,10 +1751,12 @@ tars_a2dp_start(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_start_obj,
     tars_a2dp_start
 );
+
 
 /* =========================================================
    SCAN
@@ -1732,10 +1845,12 @@ tars_a2dp_scan(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_scan_obj,
     tars_a2dp_scan
 );
+
 
 /* =========================================================
    FOUND
@@ -1782,10 +1897,12 @@ tars_a2dp_found(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_found_obj,
     tars_a2dp_found
 );
+
 
 /* =========================================================
    CONNECT
@@ -1873,10 +1990,12 @@ tars_a2dp_connect(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_connect_obj,
     tars_a2dp_connect
 );
+
 
 /* =========================================================
    TTS DOWNLOAD
@@ -1962,7 +2081,13 @@ tars_a2dp_tts_download(
         );
     }
 
+
+    /* =====================================================
+       RESET
+       ===================================================== */
+
     tars_clear_tts_state();
+
     tars_reset_tts_debug();
 
     tars_tts_error =
@@ -1973,6 +2098,11 @@ tars_a2dp_tts_download(
 
     tars_status_text =
         "TTS DOWNLOADING TO FLASH";
+
+
+    /* =====================================================
+       ERASE AUDIO LAMA
+       ===================================================== */
 
     if (!tars_erase_tts_flash()) {
 
@@ -1986,6 +2116,11 @@ tars_a2dp_tts_download(
             )
         );
     }
+
+
+    /* =====================================================
+       JSON
+       ===================================================== */
 
     size_t json_length =
         0;
@@ -2009,6 +2144,11 @@ tars_a2dp_tts_download(
             )
         );
     }
+
+
+    /* =====================================================
+       HTTP CONFIG
+       ===================================================== */
 
     esp_http_client_config_t config = {
 
@@ -2046,6 +2186,7 @@ tars_a2dp_tts_download(
             esp_crt_bundle_attach
     };
 
+
     esp_http_client_handle_t client =
         esp_http_client_init(
             &config
@@ -2071,6 +2212,11 @@ tars_a2dp_tts_download(
         );
     }
 
+
+    /* =====================================================
+       HEADERS
+       ===================================================== */
+
     esp_http_client_set_header(
         client,
         "Content-Type",
@@ -2089,29 +2235,51 @@ tars_a2dp_tts_download(
         "TARS-V1-MANZ"
     );
 
+
+    /* =====================================================
+       POST BODY
+       ===================================================== */
+
     esp_http_client_set_post_field(
         client,
         json,
         (int)json_length
     );
 
+
+    /* =====================================================
+       HTTP REQUEST
+       ===================================================== */
+
     tars_status_text =
         "TTS HTTP REQUEST";
+
 
     esp_err_t ret =
         esp_http_client_perform(
             client
         );
 
+
+    /* =====================================================
+       GET RESULT
+       ===================================================== */
+
     int status_code =
         esp_http_client_get_status_code(
             client
         );
 
+
     int64_t content_length =
         esp_http_client_get_content_length(
             client
         );
+
+
+    /* =====================================================
+       CLEANUP HTTP
+       ===================================================== */
 
     esp_http_client_cleanup(
         client
@@ -2123,6 +2291,11 @@ tars_a2dp_tts_download(
 
     tars_tts_loading =
         false;
+
+
+    /* =====================================================
+       INTERNAL ERROR
+       ===================================================== */
 
     if (
         tars_tts_error != NULL &&
@@ -2142,6 +2315,11 @@ tars_a2dp_tts_download(
         );
     }
 
+
+    /* =====================================================
+       TRANSPORT ERROR
+       ===================================================== */
+
     if (ret != ESP_OK) {
 
         tars_clear_tts_state();
@@ -2156,6 +2334,11 @@ tars_a2dp_tts_download(
             )
         );
     }
+
+
+    /* =====================================================
+       HTTP ERROR
+       ===================================================== */
 
     if (
         status_code < 200 ||
@@ -2184,6 +2367,11 @@ tars_a2dp_tts_download(
         );
     }
 
+
+    /* =====================================================
+       CEK AUDIO
+       ===================================================== */
+
     if (
         tars_tts_flash_size <
         2
@@ -2202,9 +2390,15 @@ tars_a2dp_tts_download(
         );
     }
 
+
+    /* =====================================================
+       PCM 16 BIT
+       ===================================================== */
+
     tars_tts_flash_size =
         tars_tts_flash_size &
         ~(size_t)1;
+
 
     if (
         tars_tts_flash_size <
@@ -2224,22 +2418,32 @@ tars_a2dp_tts_download(
         );
     }
 
+
+    /* =====================================================
+       SIAP
+       ===================================================== */
+
     tars_tts_ready =
         true;
 
     tars_status_text =
         "TTS SAVED TO FLASH";
 
+
     char result[120];
 
     snprintf(
         result,
         sizeof(result),
+
         "TTS SAVED: %u BYTES HTTP:%d",
+
         (unsigned int)
         tars_tts_flash_size,
+
         status_code
     );
+
 
     if (
         content_length > 0 &&
@@ -2256,6 +2460,7 @@ tars_a2dp_tts_download(
         );
     }
 
+
     return mp_obj_new_str(
         result,
         strlen(
@@ -2264,10 +2469,12 @@ tars_a2dp_tts_download(
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_1(
     tars_a2dp_tts_download_obj,
     tars_a2dp_tts_download
 );
+
 
 /* =========================================================
    TTS PLAY
@@ -2369,10 +2576,12 @@ tars_a2dp_tts_play(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_tts_play_obj,
     tars_a2dp_tts_play
 );
+
 
 /* =========================================================
    STOP AUDIO
@@ -2388,6 +2597,9 @@ tars_a2dp_stop(void)
         false;
 
     tars_tone_phase =
+        0;
+
+    tars_tts_resample_phase =
         0;
 
     if (!tars_a2dp_connected) {
@@ -2434,10 +2646,12 @@ tars_a2dp_stop(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_stop_obj,
     tars_a2dp_stop
 );
+
 
 /* =========================================================
    BLUETOOTH FULL STOP
@@ -2481,6 +2695,9 @@ tars_a2dp_bluetooth_stop(void)
     tars_tone_phase =
         0;
 
+    tars_tts_resample_phase =
+        0;
+
     if (tars_scanning) {
 
         esp_bt_gap_cancel_discovery();
@@ -2488,6 +2705,9 @@ tars_a2dp_bluetooth_stop(void)
         tars_scanning =
             false;
     }
+
+
+    /* A2DP */
 
     if (
         esp_bluedroid_get_status() ==
@@ -2497,6 +2717,9 @@ tars_a2dp_bluetooth_stop(void)
         esp_a2d_source_deinit();
     }
 
+
+    /* BLUEDROID */
+
     if (
         esp_bluedroid_get_status() ==
         ESP_BLUEDROID_STATUS_ENABLED
@@ -2504,6 +2727,7 @@ tars_a2dp_bluetooth_stop(void)
 
         esp_bluedroid_disable();
     }
+
 
     if (
         esp_bluedroid_get_status() ==
@@ -2513,6 +2737,9 @@ tars_a2dp_bluetooth_stop(void)
         esp_bluedroid_deinit();
     }
 
+
+    /* BT CONTROLLER */
+
     if (
         esp_bt_controller_get_status() ==
         ESP_BT_CONTROLLER_STATUS_ENABLED
@@ -2521,6 +2748,7 @@ tars_a2dp_bluetooth_stop(void)
         esp_bt_controller_disable();
     }
 
+
     if (
         esp_bt_controller_get_status() ==
         ESP_BT_CONTROLLER_STATUS_INITED
@@ -2528,6 +2756,7 @@ tars_a2dp_bluetooth_stop(void)
 
         esp_bt_controller_deinit();
     }
+
 
     tars_bt_started =
         false;
@@ -2548,10 +2777,12 @@ tars_a2dp_bluetooth_stop(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_bluetooth_stop_obj,
     tars_a2dp_bluetooth_stop
 );
+
 
 /* =========================================================
    STATUS
@@ -2568,10 +2799,12 @@ tars_a2dp_status(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_status_obj,
     tars_a2dp_status
 );
+
 
 /* =========================================================
    MEMORY
@@ -2639,10 +2872,12 @@ tars_a2dp_memory(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_memory_obj,
     tars_a2dp_memory
 );
+
 
 /* =========================================================
    TTS INFO
@@ -2689,10 +2924,12 @@ tars_a2dp_tts_info(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_tts_info_obj,
     tars_a2dp_tts_info
 );
+
 
 /* =========================================================
    TTS DEBUG
@@ -2713,7 +2950,7 @@ tars_a2dp_tts_debug(void)
         "MIN: %d | "
         "MAX: %d | "
         "SAMPLES READ: %u | "
-        "PCM RATE: %u | "
+        "SOURCE RATE: %u | "
         "A2DP RATE: %u",
 
         tars_tts_debug_valid
@@ -2735,7 +2972,7 @@ tars_a2dp_tts_debug(void)
         tars_tts_debug_sample_count,
 
         (unsigned int)
-        TARS_SAMPLE_RATE,
+        TARS_TTS_SOURCE_RATE,
 
         (unsigned int)
         TARS_SAMPLE_RATE
@@ -2749,10 +2986,12 @@ tars_a2dp_tts_debug(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_tts_debug_obj,
     tars_a2dp_tts_debug
 );
+
 
 /* =========================================================
    TTS HEADER DEBUG
@@ -2809,8 +3048,10 @@ tars_a2dp_tts_header(void)
         );
     }
 
+
     const char *format =
         "UNKNOWN";
+
 
     if (
         tars_tts_header_debug_size >= 3
@@ -2867,7 +3108,7 @@ tars_a2dp_tts_header(void)
         &&
         tars_tts_header_debug[1] == 0x67
         &&
-        tars_tts_header_debug[2] == 0x53
+        tars_tts_header_debug[2] == 0x67
         &&
         tars_tts_header_debug[3] == 0x53
     ) {
@@ -2881,6 +3122,7 @@ tars_a2dp_tts_header(void)
         format =
             "RAW PCM OR UNKNOWN";
     }
+
 
     snprintf(
         result,
@@ -2910,10 +3152,12 @@ tars_a2dp_tts_header(void)
     );
 }
 
+
 static MP_DEFINE_CONST_FUN_OBJ_0(
     tars_a2dp_tts_header_obj,
     tars_a2dp_tts_header
 );
+
 
 /* =========================================================
    MODULE FUNCTIONS
@@ -3063,6 +3307,7 @@ tars_a2dp_globals_table[] =
     }
 };
 
+
 /* =========================================================
    MICROPYTHON DICTIONARY
    ========================================================= */
@@ -3071,6 +3316,7 @@ static MP_DEFINE_CONST_DICT(
     tars_a2dp_globals,
     tars_a2dp_globals_table
 );
+
 
 /* =========================================================
    MICROPYTHON MODULE
@@ -3089,8 +3335,10 @@ tars_a2dp_user_cmodule =
         &tars_a2dp_globals
 };
 
+
 /* =========================================================
    MODULE REGISTER
+   HARUS SATU BARIS
    ========================================================= */
 
 MP_REGISTER_MODULE(MP_QSTR_tars_a2dp, tars_a2dp_user_cmodule);
