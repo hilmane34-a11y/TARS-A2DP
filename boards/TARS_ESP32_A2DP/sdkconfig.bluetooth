@@ -44,10 +44,23 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=n
 # Aktifkan certificate bundle untuk HTTPS client
 CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
 
+# ============================================================
+# MEMORY OPTIMIZATION
+# ============================================================
+
+# Reduce Bluetooth controller DRAM (sudah disable BLE)
+CONFIG_BT_RESERVE_DRAM=0
+
+# Disable task watchdog during long operations
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# Optimize for speed vs size (balance)
+CONFIG_COMPILER_OPTIMIZATION_DEFAULT=y
+CONFIG_COMPILER_OPTIMIZATION_SIZE=n
+
 # Custom partition TARS
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/TARS_ESP32_A2DP/partitions.csv"
 
 # Memory Management
 CONFIG_SPIRAM=n
-CONFIG_BT_RESERVE_DRAM=0
