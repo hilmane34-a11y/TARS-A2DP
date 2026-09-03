@@ -58,7 +58,7 @@
 #define TARS_CLOUD_TTS_PATH "/tts"
 #define TARS_CLOUD_TTS_PORT 443
 
-#define TARS_TTS_MAX_TEXT_LENGTH 400
+#define TARS_TTS_MAX_TEXT_LENGTH 300
 
 #define TARS_HTTP_BUFFER_SIZE 512
 #define TARS_FLASH_READ_BUFFER_SIZE 512
@@ -2064,9 +2064,9 @@ tars_a2dp_tts_download(
     ) {
 
         return mp_obj_new_str(
-            "ERROR: TTS TEXT TOO LONG MAX 400",
+            "ERROR: TTS TEXT TOO LONG MAX 300",
             strlen(
-                "ERROR: TTS TEXT TOO LONG MAX 400"
+                "ERROR: TTS TEXT TOO LONG MAX 300"
             )
         );
     }
