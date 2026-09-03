@@ -65,6 +65,8 @@
 
 #define TARS_TTS_PARTITION_NAME "ttsdata"
 
+#define TARS_TTS_HEADER_DEBUG_SIZE 16
+
 
 /* =========================================================
    MODE STATE
@@ -141,6 +143,17 @@ static bool tars_tts_debug_valid = false;
 
 
 /* =========================================================
+   TTS HEADER DEBUG STATE
+   ========================================================= */
+
+static uint8_t tars_tts_header_debug[
+    TARS_TTS_HEADER_DEBUG_SIZE
+];
+
+static size_t tars_tts_header_debug_size = 0;
+
+
+/* =========================================================
    FLASH READ BUFFER
    ========================================================= */
 
@@ -211,6 +224,14 @@ tars_reset_tts_debug(void)
     tars_tts_debug_sample_count = 0;
 
     tars_tts_debug_valid = false;
+
+    memset(
+        tars_tts_header_debug,
+        0,
+        sizeof(tars_tts_header_debug)
+    );
+
+    tars_tts_header_debug_size = 0;
 }
 
 
@@ -588,6 +609,48 @@ tars_tts_http_event(
         ) {
             return ESP_OK;
         }
+
+
+        /* =============================================
+           TTS HEADER DEBUG
+
+           SIMPAN BYTE PERTAMA RESPONSE
+           ============================================= */
+
+        if (
+            tars_tts_header_debug_size <
+            TARS_TTS_HEADER_DEBUG_SIZE
+        ) {
+
+            size_t available =
+                TARS_TTS_HEADER_DEBUG_SIZE -
+                tars_tts_header_debug_size;
+
+            size_t copy_length =
+                (size_t)evt->data_len;
+
+            if (
+                copy_length >
+                available
+            ) {
+
+                copy_length =
+                    available;
+            }
+
+            memcpy(
+                tars_tts_header_debug +
+                tars_tts_header_debug_size,
+
+                evt->data,
+
+                copy_length
+            );
+
+            tars_tts_header_debug_size +=
+                copy_length;
+        }
+
 
         if (tars_bt_started) {
 
@@ -2931,6 +2994,172 @@ static MP_DEFINE_CONST_FUN_OBJ_0(
 
 
 /* =========================================================
+   TTS HEADER DEBUG
+   ========================================================= */
+
+static mp_obj_t
+tars_a2dp_tts_header(void)
+{
+    char result[320];
+
+    char header_hex[100];
+
+    size_t pos = 0;
+
+    size_t i = 0;
+
+    while (
+        i <
+        tars_tts_header_debug_size
+    ) {
+
+        int written =
+            snprintf(
+                header_hex + pos,
+                sizeof(header_hex) - pos,
+                "%02X ",
+                (unsigned int)
+                tars_tts_header_debug[i]
+            );
+
+        if (written <= 0) {
+            break;
+        }
+
+        pos +=
+            (size_t)written;
+
+        if (
+            pos >=
+            sizeof(header_hex) - 4
+        ) {
+            break;
+        }
+
+        i++;
+    }
+
+    if (pos == 0) {
+
+        snprintf(
+            header_hex,
+            sizeof(header_hex),
+            "EMPTY"
+        );
+    }
+
+
+    const char *format =
+        "UNKNOWN";
+
+
+    if (
+        tars_tts_header_debug_size >= 3
+        &&
+        tars_tts_header_debug[0] == 0x49
+        &&
+        tars_tts_header_debug[1] == 0x44
+        &&
+        tars_tts_header_debug[2] == 0x33
+    ) {
+
+        format =
+            "MP3 ID3";
+    }
+
+    else if (
+        tars_tts_header_debug_size >= 2
+        &&
+        tars_tts_header_debug[0] == 0xFF
+        &&
+        (
+            tars_tts_header_debug[1] == 0xFB
+            ||
+            tars_tts_header_debug[1] == 0xF3
+            ||
+            tars_tts_header_debug[1] == 0xF2
+        )
+    ) {
+
+        format =
+            "MP3 FRAME";
+    }
+
+    else if (
+        tars_tts_header_debug_size >= 4
+        &&
+        tars_tts_header_debug[0] == 0x52
+        &&
+        tars_tts_header_debug[1] == 0x49
+        &&
+        tars_tts_header_debug[2] == 0x46
+        &&
+        tars_tts_header_debug[3] == 0x46
+    ) {
+
+        format =
+            "WAV RIFF";
+    }
+
+    else if (
+        tars_tts_header_debug_size >= 4
+        &&
+        tars_tts_header_debug[0] == 0x4F
+        &&
+        tars_tts_header_debug[1] == 0x67
+        &&
+        tars_tts_header_debug[2] == 0x67
+        &&
+        tars_tts_header_debug[3] == 0x53
+    ) {
+
+        format =
+            "OGG";
+    }
+
+    else {
+
+        format =
+            "RAW PCM OR UNKNOWN";
+    }
+
+
+    snprintf(
+        result,
+        sizeof(result),
+
+        "TTS HEADER | "
+        "FORMAT: %s | "
+        "SIZE: %u | "
+        "HEADER[%u]: %s",
+
+        format,
+
+        (unsigned int)
+        tars_tts_flash_size,
+
+        (unsigned int)
+        tars_tts_header_debug_size,
+
+        header_hex
+    );
+
+    return mp_obj_new_str(
+        result,
+        strlen(
+            result
+        )
+    );
+}
+
+
+static MP_DEFINE_CONST_FUN_OBJ_0(
+    tars_a2dp_tts_header_obj,
+    tars_a2dp_tts_header
+);
+
+
+/* =========================================================
    MODULE FUNCTIONS
    ========================================================= */
 
@@ -3064,6 +3293,16 @@ tars_a2dp_globals_table[] =
 
         MP_ROM_PTR(
             &tars_a2dp_tts_debug_obj
+        )
+    },
+
+    {
+        MP_ROM_QSTR(
+            MP_QSTR_tts_header
+        ),
+
+        MP_ROM_PTR(
+            &tars_a2dp_tts_header_obj
         )
     }
 };
