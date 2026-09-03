@@ -2044,14 +2044,8 @@ tars_a2dp_tts_download(
 
     esp_http_client_config_t config = {
 
-        .host =
-            TARS_CLOUD_TTS_HOST,
-
-        .path =
-            TARS_CLOUD_TTS_PATH,
-
-        .port =
-            TARS_CLOUD_TTS_PORT,
+        .url =
+    "https://tars-cloud-v3.hilmane34.workers.dev/tts",
 
         .transport_type =
             HTTP_TRANSPORT_OVER_SSL,
