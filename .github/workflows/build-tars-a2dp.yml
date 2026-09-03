@@ -70,6 +70,28 @@ jobs:
 
           make -C ports/esp32 submodules
 
+      -  name: Apply esp32_rmt.c fix
+         shell: bash
+         run: |
+          RMT_FILE="$GITHUB_WORKSPACE/micropython/ports/esp32/esp32_rmt.c"
+          
+          echo "========================================"
+          echo "FIXING esp32_rmt.c UNINITIALIZED VARIABLE"
+          echo "========================================"
+          
+          if [ ! -f "$RMT_FILE" ]; then
+            echo "ERROR: RMT FILE NOT FOUND"
+            exit 1
+          fi
+          
+          # Initialize resolution_hz variable to 1 MHz (1000000 Hz)
+          sed -i 's/uint32_t resolution_hz;/uint32_t resolution_hz = 1000000; \/\/ Default 1 MHz resolution/' "$RMT_FILE"
+          
+          echo "PATCH APPLIED"
+          
+          # Verify the patch
+          grep -n "resolution_hz" "$RMT_FILE" | head -5
+      
       - name: Install TARS board
         shell: bash
         run: |
