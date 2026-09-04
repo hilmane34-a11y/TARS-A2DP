@@ -1,116 +1,65 @@
 CONFIG_BT_ENABLED=y
 
-# ============================================================
-# BLUETOOTH CLASSIC ONLY
-# ============================================================
-
 CONFIG_BT_BLUEDROID_ENABLED=y
 CONFIG_BT_CLASSIC_ENABLED=y
 CONFIG_BT_A2DP_ENABLE=y
 
-# BLE MATI TOTAL
-CONFIG_BT_BLE_ENABLED=n
+# A2DP Audio Streaming Configuration
+CONFIG_A2D_DYNAMIC_MEMORY=y
+CONFIG_A2D_SBC_ENCODER_INCLUDED=y
+
+# Memory optimized SBC configuration
+CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE=2048
+CONFIG_A2DP_SBC_BUFFER_POOL_SIZE=10
+
+# L2CAP Memory Optimization
+CONFIG_BT_L2CAP_DEFALT_MTU=672
+CONFIG_BT_L2CAP_TX_BUFFER_SIZE=3
+
+# Bluetooth Controller Mode
 CONFIG_BTDM_CTRL_MODE_BLE_ONLY=n
 CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
 CONFIG_BTDM_CTRL_MODE_BTDM=n
 
-# ============================================================
-# A2DP AUDIO
-# ============================================================
+# Bluetooth BR/EDR Memory
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=n
 
-CONFIG_A2D_DYNAMIC_MEMORY=y
-CONFIG_A2D_SBC_ENCODER_INCLUDED=y
-
-# Jangan terlalu kecil, audio bisa rusak
-CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE=2048
-
-# Buffer sedang: hemat RAM tapi cukup stabil
-CONFIG_A2DP_SBC_BUFFER_POOL_SIZE=8
-
-# ============================================================
-# L2CAP
-# ============================================================
-
-# MTU 48 terlalu kecil untuk audio
-CONFIG_BT_L2CAP_DEFALT_MTU=672
-
-# Minimal tapi masih aman
-CONFIG_BT_L2CAP_TX_BUFFER_SIZE=2
-CONFIG_BT_L2CAP_CHANNELS_NUM=1
-
-# ============================================================
-# CONNECTION LIMIT
-# ============================================================
-
+# Stack / Link Memory Optimization
 CONFIG_BT_CLASSIC_QNUM_LINKS=1
-CONFIG_BT_ACL_CONNECTIONS_NUM=1
+CONFIG_BT_L2CAP_CHANNELS_NUM=4
 
-# ============================================================
-# ACL BUFFER
-# ============================================================
+# Reduce BLE overhead if using BR/EDR only
+CONFIG_BT_BLE_ENABLED=n
 
-# 2 terlalu mepet dan bisa bikin audio renyek
-CONFIG_BT_BR_ACL_RX_BUFFERS=4
-CONFIG_BT_BR_ACL_TX_BUFFERS=4
+# HTTPS / TLS untuk TARS Cloud TTS
+CONFIG_MBEDTLS_SSL_ALPN=y
 
-# BLE buffer tidak diperlukan
-CONFIG_BT_BLE_ACL_RX_BUFFERS=0
-CONFIG_BT_BLE_ACL_TX_BUFFERS=0
+# Certificate Bundle
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=n
+
+# Aktifkan certificate bundle untuk HTTPS client
+CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
 
 # ============================================================
 # MEMORY OPTIMIZATION
 # ============================================================
 
-CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=n
-CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=n
+# Reduce Bluetooth controller DRAM (sudah disable BLE)
 CONFIG_BT_RESERVE_DRAM=0
 
-# ============================================================
-# DISABLE UNUSED BLUETOOTH FEATURES
-# ============================================================
-
-CONFIG_BT_SMP_ENABLE=n
-CONFIG_BT_GAP_VIRTUAL_ADV_ENABLE=n
-
-CONFIG_BT_CTRL_BLE_MAX_ACT=0
-CONFIG_BT_CTRL_BR_EDR_MAX_ACT=1
-CONFIG_BT_CTRL_BR_EDR_MAX_CONN=1
-
-# ============================================================
-# HTTPS / TLS
-# ============================================================
-
-CONFIG_MBEDTLS_SSL_ALPN=y
-
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=n
-
-CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
-
-# ============================================================
-# SYSTEM
-# ============================================================
-
+# Disable task watchdog during long operations
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 
-CONFIG_COMPILER_OPTIMIZATION_SIZE=y
-CONFIG_COMPILER_OPTIMIZATION_DEFAULT=n
+# Optimize for speed vs size (balance)
+CONFIG_COMPILER_OPTIMIZATION_DEFAULT=y
+CONFIG_COMPILER_OPTIMIZATION_SIZE=n
 
-CONFIG_SPIRAM=n
-
-# ============================================================
-# BLUETOOTH LOGS OFF
-# ============================================================
-
-CONFIG_BT_LOG_HCI_TRACE_LEVEL=0
-CONFIG_BT_LOG_BTM_TRACE_LEVEL=0
-CONFIG_BT_LOG_L2CAP_TRACE_LEVEL=0
-CONFIG_BT_LOG_RFCOMM_TRACE_LEVEL=0
-
-# ============================================================
-# CUSTOM PARTITION
-# ============================================================
-
+# Custom partition TARS
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/TARS_ESP32_A2DP/partitions.csv"
+
+# Memory Management
+CONFIG_SPIRAM=n
