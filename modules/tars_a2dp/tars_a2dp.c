@@ -2171,7 +2171,7 @@ tars_a2dp_tts_download(
             tars_tts_http_event,
 
         .timeout_ms =
-            30000,
+            120000,
 
         .buffer_size =
             TARS_HTTP_BUFFER_SIZE,
