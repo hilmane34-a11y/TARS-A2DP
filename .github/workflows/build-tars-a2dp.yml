@@ -69,6 +69,50 @@ jobs:
           cd "$GITHUB_WORKSPACE/micropython"
           make -C ports/esp32 submodules
 
+      - name: Apply esp32_rmt.c fix
+        shell: bash
+        run: |
+          RMT_FILE="$GITHUB_WORKSPACE/micropython/ports/esp32/esp32_rmt.c"
+
+          echo "========================================"
+          echo "PATCH ESP32 RMT"
+          echo "========================================"
+
+          if [ ! -f "$RMT_FILE" ]; then
+            echo "ERROR: esp32_rmt.c NOT FOUND"
+            exit 1
+          fi
+
+          echo "BEFORE PATCH:"
+          grep -n "resolution_hz" "$RMT_FILE" || true
+
+          if grep -q "mp_uint_t resolution_hz = 1000000;" "$RMT_FILE"; then
+            echo "RMT ALREADY PATCHED"
+
+          elif grep -q "mp_uint_t resolution_hz;" "$RMT_FILE"; then
+            sed -i \
+              's/mp_uint_t resolution_hz;/mp_uint_t resolution_hz = 1000000;/' \
+              "$RMT_FILE"
+
+          else
+            echo "ERROR: EXPECTED resolution_hz DECLARATION NOT FOUND"
+            grep -n "resolution_hz" "$RMT_FILE" || true
+            exit 1
+          fi
+
+          echo ""
+          echo "AFTER PATCH:"
+          grep -n "resolution_hz" "$RMT_FILE" || true
+
+          echo ""
+
+          if grep -q "mp_uint_t resolution_hz = 1000000;" "$RMT_FILE"; then
+            echo "PATCH SUCCESS: resolution_hz INITIALIZED"
+          else
+            echo "ERROR: RMT PATCH FAILED"
+            exit 1
+          fi
+
       - name: Install TARS board
         shell: bash
         run: |
