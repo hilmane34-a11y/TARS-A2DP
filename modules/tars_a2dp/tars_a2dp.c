@@ -67,6 +67,18 @@
 
 #define TARS_TTS_HEADER_DEBUG_SIZE 16
 
+/* =========================================================
+   TTS VOLUME
+
+   2.8x = LEBIH KERAS
+   TIDAK MEMBUTUHKAN BUFFER RAM TAMBAHAN
+
+   JIKA TERLALU PECAH:
+   TURUNKAN KE 2.2f ATAU 2.5f
+   ========================================================= */
+
+#define TARS_TTS_VOLUME_GAIN 2.8f
+
 
 /* =========================================================
    BLUETOOTH MEMORY PROTECTION
@@ -441,10 +453,6 @@ tars_read_pcm_sample(
         (int16_t)value;
 
 
-    /* =====================================================
-       TTS PCM DEBUG
-       ===================================================== */
-
     if (!tars_tts_debug_valid) {
 
         tars_tts_debug_first_sample =
@@ -483,8 +491,35 @@ tars_read_pcm_sample(
 
     tars_tts_debug_sample_count++;
 
-
     return true;
+}
+
+
+/* =========================================================
+   APPLY TTS VOLUME
+
+   CLIPPING PROTECTION
+   TIDAK MEMBUTUHKAN BUFFER RAM TAMBAHAN
+   ========================================================= */
+
+static inline int16_t
+tars_apply_volume(
+    int16_t sample
+)
+{
+    float amplified =
+        (float)sample *
+        TARS_TTS_VOLUME_GAIN;
+
+    if (amplified > 32767.0f) {
+        return 32767;
+    }
+
+    if (amplified < -32768.0f) {
+        return -32768;
+    }
+
+    return (int16_t)amplified;
 }
 
 
@@ -618,12 +653,6 @@ tars_tts_http_event(
             return ESP_OK;
         }
 
-
-        /* =============================================
-           TTS HEADER DEBUG
-
-           SIMPAN BYTE PERTAMA RESPONSE
-           ============================================= */
 
         if (
             tars_tts_header_debug_size <
@@ -968,6 +997,16 @@ tars_a2dp_data_callback(
 
                 break;
             }
+
+
+            /* =============================================
+               PERBESAR VOLUME TTS
+               ============================================= */
+
+            sample =
+                tars_apply_volume(
+                    sample
+                );
 
 
             /* MONO -> STEREO */
@@ -1536,11 +1575,6 @@ tars_reset_bluetooth_state(void)
 static bool
 tars_try_start_bt(void)
 {
-    /*
-     * TARS only uses Bluetooth Classic A2DP.
-     * BLE memory is therefore not required.
-     */
-
     esp_err_t release_ret =
         esp_bt_controller_mem_release(
             ESP_BT_MODE_BLE
@@ -1661,10 +1695,6 @@ tars_a2dp_start(void)
     }
 
 
-    /* =====================================================
-       CHECK MEMORY BEFORE STARTING BLUETOOTH
-       ===================================================== */
-
     if (!tars_try_start_bt()) {
 
         size_t free_heap =
@@ -1704,24 +1734,12 @@ tars_a2dp_start(void)
     }
 
 
-    /* =====================================================
-       RESET STATE
-       ===================================================== */
-
     tars_reset_bluetooth_state();
 
-
-    /* =====================================================
-       CONTROLLER CONFIG
-       ===================================================== */
 
     esp_bt_controller_config_t bt_cfg =
         BT_CONTROLLER_INIT_CONFIG_DEFAULT();
 
-
-    /* =====================================================
-       BT CONTROLLER INIT
-       ===================================================== */
 
     ret =
         esp_bt_controller_init(
@@ -1741,10 +1759,6 @@ tars_a2dp_start(void)
         );
     }
 
-
-    /* =====================================================
-       ENABLE CLASSIC BT ONLY
-       ===================================================== */
 
     ret =
         esp_bt_controller_enable(
@@ -1767,10 +1781,6 @@ tars_a2dp_start(void)
     }
 
 
-    /* =====================================================
-       BLUEDROID INIT
-       ===================================================== */
-
     ret =
         esp_bluedroid_init();
 
@@ -1791,10 +1801,6 @@ tars_a2dp_start(void)
         );
     }
 
-
-    /* =====================================================
-       BLUEDROID ENABLE
-       ===================================================== */
 
     ret =
         esp_bluedroid_enable();
@@ -1818,10 +1824,6 @@ tars_a2dp_start(void)
         );
     }
 
-
-    /* =====================================================
-       GAP CALLBACK
-       ===================================================== */
 
     ret =
         esp_bt_gap_register_callback(
@@ -1850,28 +1852,16 @@ tars_a2dp_start(void)
     }
 
 
-    /* =====================================================
-       DEVICE NAME
-       ===================================================== */
-
     esp_bt_gap_set_device_name(
         TARS_DEVICE_NAME
     );
 
-
-    /* =====================================================
-       SCAN MODE
-       ===================================================== */
 
     esp_bt_gap_set_scan_mode(
         ESP_BT_CONNECTABLE,
         ESP_BT_NON_CONNECTABLE
     );
 
-
-    /* =====================================================
-       A2DP CALLBACK
-       ===================================================== */
 
     ret =
         esp_a2d_register_callback(
@@ -1900,10 +1890,6 @@ tars_a2dp_start(void)
     }
 
 
-    /* =====================================================
-       A2DP SOURCE INIT
-       ===================================================== */
-
     ret =
         esp_a2d_source_init();
 
@@ -1928,10 +1914,6 @@ tars_a2dp_start(void)
         );
     }
 
-
-    /* =====================================================
-       AUDIO CALLBACK
-       ===================================================== */
 
     ret =
         esp_a2d_source_register_data_callback(
@@ -1961,10 +1943,6 @@ tars_a2dp_start(void)
         );
     }
 
-
-    /* =====================================================
-       SUCCESS
-       ===================================================== */
 
     tars_bt_started =
         true;
@@ -2354,10 +2332,6 @@ tars_a2dp_tts_download(
     }
 
 
-    /* =====================================================
-       RESET
-       ===================================================== */
-
     tars_clear_tts_state();
 
     tars_reset_tts_debug();
@@ -2372,10 +2346,6 @@ tars_a2dp_tts_download(
         "TTS DOWNLOADING TO FLASH";
 
 
-    /* =====================================================
-       ERASE AUDIO LAMA
-       ===================================================== */
-
     if (!tars_erase_tts_flash()) {
 
         tars_tts_loading =
@@ -2389,10 +2359,6 @@ tars_a2dp_tts_download(
         );
     }
 
-
-    /* =====================================================
-       JSON
-       ===================================================== */
 
     size_t json_length =
         0;
@@ -2417,10 +2383,6 @@ tars_a2dp_tts_download(
         );
     }
 
-
-    /* =====================================================
-       HTTP CONFIG
-       ===================================================== */
 
     esp_http_client_config_t config = {
 
@@ -2485,10 +2447,6 @@ tars_a2dp_tts_download(
     }
 
 
-    /* =====================================================
-       HEADERS
-       ===================================================== */
-
     esp_http_client_set_header(
         client,
         "Content-Type",
@@ -2508,20 +2466,12 @@ tars_a2dp_tts_download(
     );
 
 
-    /* =====================================================
-       POST BODY
-       ===================================================== */
-
     esp_http_client_set_post_field(
         client,
         json,
         (int)json_length
     );
 
-
-    /* =====================================================
-       HTTP REQUEST
-       ===================================================== */
 
     tars_status_text =
         "TTS HTTP REQUEST";
@@ -2532,10 +2482,6 @@ tars_a2dp_tts_download(
             client
         );
 
-
-    /* =====================================================
-       GET RESULT
-       ===================================================== */
 
     int status_code =
         esp_http_client_get_status_code(
@@ -2549,10 +2495,6 @@ tars_a2dp_tts_download(
         );
 
 
-    /* =====================================================
-       CLEANUP HTTP
-       ===================================================== */
-
     esp_http_client_cleanup(
         client
     );
@@ -2564,10 +2506,6 @@ tars_a2dp_tts_download(
     tars_tts_loading =
         false;
 
-
-    /* =====================================================
-       INTERNAL ERROR
-       ===================================================== */
 
     if (
         tars_tts_error != NULL &&
@@ -2588,10 +2526,6 @@ tars_a2dp_tts_download(
     }
 
 
-    /* =====================================================
-       TRANSPORT ERROR
-       ===================================================== */
-
     if (ret != ESP_OK) {
 
         tars_clear_tts_state();
@@ -2607,10 +2541,6 @@ tars_a2dp_tts_download(
         );
     }
 
-
-    /* =====================================================
-       HTTP ERROR
-       ===================================================== */
 
     if (
         status_code < 200 ||
@@ -2640,10 +2570,6 @@ tars_a2dp_tts_download(
     }
 
 
-    /* =====================================================
-       CEK AUDIO
-       ===================================================== */
-
     if (
         tars_tts_flash_size <
         2
@@ -2662,10 +2588,6 @@ tars_a2dp_tts_download(
         );
     }
 
-
-    /* =====================================================
-       PCM 16 BIT
-       ===================================================== */
 
     tars_tts_flash_size =
         tars_tts_flash_size &
@@ -2690,10 +2612,6 @@ tars_a2dp_tts_download(
         );
     }
 
-
-    /* =====================================================
-       SIAP
-       ===================================================== */
 
     tars_tts_ready =
         true;
@@ -2979,8 +2897,6 @@ tars_a2dp_bluetooth_stop(void)
     }
 
 
-    /* A2DP */
-
     if (
         esp_bluedroid_get_status() ==
         ESP_BLUEDROID_STATUS_ENABLED
@@ -2989,8 +2905,6 @@ tars_a2dp_bluetooth_stop(void)
         esp_a2d_source_deinit();
     }
 
-
-    /* BLUEDROID */
 
     if (
         esp_bluedroid_get_status() ==
@@ -3009,8 +2923,6 @@ tars_a2dp_bluetooth_stop(void)
         esp_bluedroid_deinit();
     }
 
-
-    /* BT CONTROLLER */
 
     if (
         esp_bt_controller_get_status() ==
@@ -3608,9 +3520,6 @@ tars_a2dp_user_cmodule =
 };
 
 
-/* =========================================================
-   MODULE REGISTER
-   HARUS SATU BARIS
-   ========================================================= */
+/* MODULE REGISTER - HARUS SATU BARIS */
 
 MP_REGISTER_MODULE(MP_QSTR_tars_a2dp, tars_a2dp_user_cmodule);
