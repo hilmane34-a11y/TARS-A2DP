@@ -67,35 +67,7 @@ jobs:
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
-
           make -C ports/esp32 submodules
-
-      - name: Apply esp32_rmt.c fix
-        shell: bash
-        run: |
-          RMT_FILE="$GITHUB_WORKSPACE/micropython/ports/esp32/esp32_rmt.c"
-          
-          echo "========================================"
-          echo "FIXING esp32_rmt.c UNINITIALIZED VARIABLE"
-          echo "========================================"
-          
-          if [ ! -f "$RMT_FILE" ]; then
-            echo "ERROR: RMT FILE NOT FOUND"
-            exit 1
-          fi
-          
-          echo "BEFORE PATCH:"
-          grep -n "uint32_t resolution_hz" "$RMT_FILE"
-          
-          # Initialize resolution_hz variable to 1 MHz (1000000 Hz)
-          sed -i 's/uint32_t resolution_hz;/uint32_t resolution_hz = 1000000; \/\/ Default 1 MHz resolution/g' "$RMT_FILE"
-          
-          echo ""
-          echo "AFTER PATCH:"
-          grep -n "resolution_hz" "$RMT_FILE"
-          
-          echo ""
-          echo "PATCH APPLIED SUCCESSFULLY"
 
       - name: Install TARS board
         shell: bash
@@ -137,7 +109,6 @@ jobs:
           sed -i '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
 
           cat >> "$BOARD" << 'EOF'
-
           # HTTPS / TLS untuk TARS Cloud TTS
           CONFIG_MBEDTLS_SSL_ALPN=y
 
@@ -169,13 +140,14 @@ jobs:
           if [ -f "$REQ" ]; then
             echo "$REQ"
           else
-            echo "NOT FOUND: $REQ"
+            echo "ERROR: REQUESTS FILE NOT FOUND"
+            exit 1
           fi
 
           if [ -f "$UREQ" ]; then
             echo "$UREQ"
           else
-            echo "NOT FOUND: $UREQ"
+            echo "WARNING: UREQUESTS FILE NOT FOUND"
           fi
 
           echo ""
@@ -192,11 +164,6 @@ jobs:
           echo "========================================"
           echo "PATCHING HTTPS BACKEND"
           echo "========================================"
-
-          if [ ! -f "$REQ" ]; then
-            echo "ERROR: REQUESTS FILE NOT FOUND"
-            exit 1
-          fi
 
           sed -i -E \
             's/^([[:space:]]*)import[[:space:]]+tls[[:space:]]*$/\1import ssl as tls/' \
@@ -225,6 +192,7 @@ jobs:
 
             echo "ERROR: ORIGINAL TLS IMPORT STILL EXISTS"
             exit 1
+
           fi
 
           if grep -q -E \
@@ -258,25 +226,55 @@ jobs:
 
           grep -n \
             "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE" \
-            || true
+            "$A2DP_FILE" || true
 
-          sed -i \
-            's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
-            "$A2DP_FILE"
+          if grep -q \
+            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
+            "$A2DP_FILE"; then
+
+            echo "A2DP QUEUE ALREADY PATCHED TO 16"
+
+          else
+
+            sed -i \
+              's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
+              "$A2DP_FILE"
+
+          fi
 
           echo ""
-
           echo "AFTER PATCH:"
 
           grep -n \
             "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE" \
-            || true
+            "$A2DP_FILE" || true
+
+          echo ""
+
+          if grep -q \
+            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
+            "$A2DP_FILE"; then
+
+            echo "PATCH SUCCESS: A2DP QUEUE = 16"
+
+          else
+
+            echo "ERROR: A2DP QUEUE PATCH FAILED"
+            echo "ACTUAL SOURCE LINE:"
+
+            grep -n \
+              "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
+              "$A2DP_FILE" || true
+
+            exit 1
+
+          fi
 
       - name: Build TARS firmware
         shell: bash
         run: |
+          set -o pipefail
+
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
@@ -307,64 +305,56 @@ jobs:
 
             grep -n \
               -E "^(CONFIG_ESP_TLS|# CONFIG_ESP_TLS)" \
-              "$BUILD/sdkconfig" \
-              || true
+              "$BUILD/sdkconfig" || true
 
             echo ""
             echo "----- CERTIFICATE BUNDLE -----"
 
             grep -n \
               -E "^(CONFIG_MBEDTLS_CERTIFICATE|# CONFIG_MBEDTLS_CERTIFICATE)" \
-              "$BUILD/sdkconfig" \
-              || true
+              "$BUILD/sdkconfig" || true
 
             echo ""
             echo "----- SSL / TLS -----"
 
             grep -n \
               -E "^(CONFIG_MBEDTLS_SSL|# CONFIG_MBEDTLS_SSL|CONFIG_MBEDTLS_TLS|# CONFIG_MBEDTLS_TLS)" \
-              "$BUILD/sdkconfig" \
-              || true
+              "$BUILD/sdkconfig" || true
 
             echo ""
             echo "----- KEY EXCHANGE -----"
 
             grep -n \
               -E "^(CONFIG_MBEDTLS_KEY_EXCHANGE|# CONFIG_MBEDTLS_KEY_EXCHANGE)" \
-              "$BUILD/sdkconfig" \
-              || true
+              "$BUILD/sdkconfig" || true
 
             echo ""
             echo "----- RSA / ECDSA / ECDH / ECP -----"
 
             grep -n \
               -E "^(CONFIG_MBEDTLS_(RSA|ECDSA|ECDH|ECP)|# CONFIG_MBEDTLS_(RSA|ECDSA|ECDH|ECP))" \
-              "$BUILD/sdkconfig" \
-              || true
+              "$BUILD/sdkconfig" || true
 
             echo ""
             echo "----- X509 / PK / ASN1 -----"
 
             grep -n \
               -E "^(CONFIG_MBEDTLS_(X509|PK_|ASN1)|# CONFIG_MBEDTLS_(X509|PK_|ASN1))" \
-              "$BUILD/sdkconfig" \
-              || true
+              "$BUILD/sdkconfig" || true
 
             echo ""
             echo "----- HASH -----"
 
             grep -n \
               -E "^(CONFIG_MBEDTLS_(SHA|MD5)|# CONFIG_MBEDTLS_(SHA|MD5))" \
-              "$BUILD/sdkconfig" \
-              || true
+              "$BUILD/sdkconfig" || true
 
             echo ""
             echo "----- ENTIRE MBEDTLS CONFIG -----"
 
             grep -n \
               -E "^(CONFIG_MBEDTLS_|# CONFIG_MBEDTLS_)" \
-              "$BUILD/sdkconfig" \
-              || true
+              "$BUILD/sdkconfig" || true
 
           else
 
