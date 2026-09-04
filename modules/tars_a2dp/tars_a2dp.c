@@ -72,7 +72,7 @@
    BLUETOOTH MEMORY PROTECTION
    ========================================================= */
 
-#define TARS_BT_MIN_HEAP    (80 * 1024)
+#define TARS_BT_MIN_HEAP    (48 * 1024)
 #define TARS_BT_MIN_LARGEST (16 * 1024)
 
 
