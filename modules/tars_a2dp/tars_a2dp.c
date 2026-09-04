@@ -54,7 +54,7 @@
 #define TARS_SAMPLE_RATE 44100
 #define TARS_TTS_SOURCE_RATE 24000
 
-#define TARS_CLOUD_TTS_HOST "tars-cloud-v3.hilmane34.workers.dev"
+#define TARS_CLOUD_TTS_HOST "tars-cloud-v1.hilmane34.workers.dev"
 #define TARS_CLOUD_TTS_PATH "/tts"
 #define TARS_CLOUD_TTS_PORT 443
 
