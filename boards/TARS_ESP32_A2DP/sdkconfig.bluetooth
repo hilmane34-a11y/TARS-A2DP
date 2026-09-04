@@ -1,124 +1,84 @@
-# ============================================================
-# TARS ESP32 A2DP
-# BALANCED LOW-RAM CONFIG
-# Target Bluetooth RAM: sekitar 40-45 KB
-# ============================================================
-
-# ------------------------------------------------------------
-# BLUETOOTH BASIC
-# ------------------------------------------------------------
-
 CONFIG_BT_ENABLED=y
-CONFIG_BT_BLUEDROID_ENABLED=y
 
-# Classic Bluetooth saja
+# ============================================================
+# BLUETOOTH CLASSIC ONLY
+# ============================================================
+
+CONFIG_BT_BLUEDROID_ENABLED=y
 CONFIG_BT_CLASSIC_ENABLED=y
 CONFIG_BT_A2DP_ENABLE=y
 
-# BLE dimatikan
+# BLE MATI TOTAL
 CONFIG_BT_BLE_ENABLED=n
-CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=n
-
-# BR/EDR ONLY
 CONFIG_BTDM_CTRL_MODE_BLE_ONLY=n
 CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
 CONFIG_BTDM_CTRL_MODE_BTDM=n
 
+# ============================================================
+# A2DP AUDIO
+# ============================================================
 
-# ------------------------------------------------------------
-# A2DP
-# ------------------------------------------------------------
-
-# Dynamic allocation agar RAM tidak semuanya direserve permanen
 CONFIG_A2D_DYNAMIC_MEMORY=y
-
-# SBC encoder
 CONFIG_A2D_SBC_ENCODER_INCLUDED=y
 
-# JANGAN terlalu kecil.
-# 1024 sebelumnya berpotensi membuat audio/callback bermasalah.
+# Jangan terlalu kecil, audio bisa rusak
 CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE=2048
 
-# Pool kecil tapi masih aman
+# Buffer sedang: hemat RAM tapi cukup stabil
 CONFIG_A2DP_SBC_BUFFER_POOL_SIZE=8
 
-
-# ------------------------------------------------------------
-# CLASSIC BLUETOOTH CONNECTION
-# ------------------------------------------------------------
-
-# TARS hanya membutuhkan 1 speaker
-CONFIG_BT_CLASSIC_QNUM_LINKS=1
-CONFIG_BT_ACL_CONNECTIONS_NUM=1
-CONFIG_BT_L2CAP_CHANNELS_NUM=2
-
-
-# ------------------------------------------------------------
+# ============================================================
 # L2CAP
-# ------------------------------------------------------------
+# ============================================================
 
-# Jangan pakai MTU 48.
-# Terlalu kecil untuk streaming audio.
+# MTU 48 terlalu kecil untuk audio
 CONFIG_BT_L2CAP_DEFALT_MTU=672
 
-# Tetap hemat buffer
+# Minimal tapi masih aman
 CONFIG_BT_L2CAP_TX_BUFFER_SIZE=2
+CONFIG_BT_L2CAP_CHANNELS_NUM=1
 
+# ============================================================
+# CONNECTION LIMIT
+# ============================================================
 
-# ------------------------------------------------------------
-# BLUETOOTH CONTROLLER
-# ------------------------------------------------------------
+CONFIG_BT_CLASSIC_QNUM_LINKS=1
+CONFIG_BT_ACL_CONNECTIONS_NUM=1
 
-CONFIG_BT_CTRL_BLE_MAX_ACT=0
+# ============================================================
+# ACL BUFFER
+# ============================================================
 
-# Hanya satu aktivitas/connection BR/EDR
-CONFIG_BT_CTRL_BR_EDR_MAX_ACT=1
-CONFIG_BT_CTRL_BR_EDR_MAX_CONN=1
-
-
-# ------------------------------------------------------------
-# ACL BUFFERS
-# ------------------------------------------------------------
-
-# Minimal yang masih cukup untuk A2DP
+# 2 terlalu mepet dan bisa bikin audio renyek
 CONFIG_BT_BR_ACL_RX_BUFFERS=4
 CONFIG_BT_BR_ACL_TX_BUFFERS=4
 
+# BLE buffer tidak diperlukan
+CONFIG_BT_BLE_ACL_RX_BUFFERS=0
+CONFIG_BT_BLE_ACL_TX_BUFFERS=0
 
-# ------------------------------------------------------------
-# MEMORY
-# ------------------------------------------------------------
+# ============================================================
+# MEMORY OPTIMIZATION
+# ============================================================
 
-# Jangan reserve DRAM Bluetooth secara statis jika konfigurasi
-# IDF/port mendukung dynamic allocation
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=n
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=n
 CONFIG_BT_RESERVE_DRAM=0
 
-# Tidak ada PSRAM
-CONFIG_SPIRAM=n
-CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=n
-
-
-# ------------------------------------------------------------
-# DISABLE UNUSED BT FEATURES
-# ------------------------------------------------------------
+# ============================================================
+# DISABLE UNUSED BLUETOOTH FEATURES
+# ============================================================
 
 CONFIG_BT_SMP_ENABLE=n
 CONFIG_BT_GAP_VIRTUAL_ADV_ENABLE=n
 
+CONFIG_BT_CTRL_BLE_MAX_ACT=0
+CONFIG_BT_CTRL_BR_EDR_MAX_ACT=1
+CONFIG_BT_CTRL_BR_EDR_MAX_CONN=1
 
-# ------------------------------------------------------------
-# LOGGING
-# ------------------------------------------------------------
-
-CONFIG_BT_LOG_HCI_TRACE_LEVEL=0
-CONFIG_BT_LOG_BTM_TRACE_LEVEL=0
-CONFIG_BT_LOG_L2CAP_TRACE_LEVEL=0
-CONFIG_BT_LOG_RFCOMM_TRACE_LEVEL=0
-
-
-# ------------------------------------------------------------
-# TLS / HTTPS
-# ------------------------------------------------------------
+# ============================================================
+# HTTPS / TLS
+# ============================================================
 
 CONFIG_MBEDTLS_SSL_ALPN=y
 
@@ -128,25 +88,29 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=n
 
 CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
 
-
-# ------------------------------------------------------------
-# WATCHDOG
-# ------------------------------------------------------------
+# ============================================================
+# SYSTEM
+# ============================================================
 
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
-
-
-# ------------------------------------------------------------
-# COMPILER
-# ------------------------------------------------------------
 
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_COMPILER_OPTIMIZATION_DEFAULT=n
 
+CONFIG_SPIRAM=n
 
-# ------------------------------------------------------------
-# PARTITION
-# ------------------------------------------------------------
+# ============================================================
+# BLUETOOTH LOGS OFF
+# ============================================================
+
+CONFIG_BT_LOG_HCI_TRACE_LEVEL=0
+CONFIG_BT_LOG_BTM_TRACE_LEVEL=0
+CONFIG_BT_LOG_L2CAP_TRACE_LEVEL=0
+CONFIG_BT_LOG_RFCOMM_TRACE_LEVEL=0
+
+# ============================================================
+# CUSTOM PARTITION
+# ============================================================
 
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/TARS_ESP32_A2DP/partitions.csv"
