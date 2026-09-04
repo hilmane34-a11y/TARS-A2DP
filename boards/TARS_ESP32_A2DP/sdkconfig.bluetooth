@@ -1,87 +1,152 @@
-CONFIG_BT_ENABLED=y
+# ============================================================
+# TARS ESP32 A2DP
+# BALANCED LOW-RAM CONFIG
+# Target Bluetooth RAM: sekitar 40-45 KB
+# ============================================================
 
+# ------------------------------------------------------------
+# BLUETOOTH BASIC
+# ------------------------------------------------------------
+
+CONFIG_BT_ENABLED=y
 CONFIG_BT_BLUEDROID_ENABLED=y
+
+# Classic Bluetooth saja
 CONFIG_BT_CLASSIC_ENABLED=y
 CONFIG_BT_A2DP_ENABLE=y
 
-# A2DP Audio Streaming Configuration - OPTIMIZED FOR MINIMAL RAM
-CONFIG_A2D_DYNAMIC_MEMORY=y
-CONFIG_A2D_SBC_ENCODER_INCLUDED=y
+# BLE dimatikan
+CONFIG_BT_BLE_ENABLED=n
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=n
 
-# Memory optimized SBC configuration - DRASTICALLY REDUCED
-CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE=1024
-CONFIG_A2DP_SBC_BUFFER_POOL_SIZE=4
-
-# L2CAP Memory Optimization - MINIMAL
-CONFIG_BT_L2CAP_DEFALT_MTU=48
-CONFIG_BT_L2CAP_TX_BUFFER_SIZE=1
-
-# Bluetooth Controller Mode - BR/EDR ONLY
+# BR/EDR ONLY
 CONFIG_BTDM_CTRL_MODE_BLE_ONLY=n
 CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
 CONFIG_BTDM_CTRL_MODE_BTDM=n
 
-# Bluetooth BR/EDR Memory - OPTIMIZED
-CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=n
-CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=n
 
-# Stack / Link Memory Optimization - MINIMAL
+# ------------------------------------------------------------
+# A2DP
+# ------------------------------------------------------------
+
+# Dynamic allocation agar RAM tidak semuanya direserve permanen
+CONFIG_A2D_DYNAMIC_MEMORY=y
+
+# SBC encoder
+CONFIG_A2D_SBC_ENCODER_INCLUDED=y
+
+# JANGAN terlalu kecil.
+# 1024 sebelumnya berpotensi membuat audio/callback bermasalah.
+CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE=2048
+
+# Pool kecil tapi masih aman
+CONFIG_A2DP_SBC_BUFFER_POOL_SIZE=8
+
+
+# ------------------------------------------------------------
+# CLASSIC BLUETOOTH CONNECTION
+# ------------------------------------------------------------
+
+# TARS hanya membutuhkan 1 speaker
 CONFIG_BT_CLASSIC_QNUM_LINKS=1
-CONFIG_BT_L2CAP_CHANNELS_NUM=1
 CONFIG_BT_ACL_CONNECTIONS_NUM=1
+CONFIG_BT_L2CAP_CHANNELS_NUM=2
 
-# Disable BLE entirely (using BR/EDR only)
-CONFIG_BT_BLE_ENABLED=n
 
-# HTTPS / TLS untuk TARS Cloud TTS
-CONFIG_MBEDTLS_SSL_ALPN=y
+# ------------------------------------------------------------
+# L2CAP
+# ------------------------------------------------------------
 
-# Certificate Bundle
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=n
+# Jangan pakai MTU 48.
+# Terlalu kecil untuk streaming audio.
+CONFIG_BT_L2CAP_DEFALT_MTU=672
 
-# Aktifkan certificate bundle untuk HTTPS client
-CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
+# Tetap hemat buffer
+CONFIG_BT_L2CAP_TX_BUFFER_SIZE=2
 
-# ============================================================
-# MEMORY OPTIMIZATION - AGGRESSIVE REDUCTION
-# ============================================================
 
-# Reduce Bluetooth controller DRAM - DISABLE RESERVED DRAM
-CONFIG_BT_RESERVE_DRAM=0
+# ------------------------------------------------------------
+# BLUETOOTH CONTROLLER
+# ------------------------------------------------------------
 
-# Disable unused Bluetooth features
-CONFIG_BT_SMP_ENABLE=n
-CONFIG_BT_GAP_VIRTUAL_ADV_ENABLE=n
-
-# Bluetooth controller optimizations
 CONFIG_BT_CTRL_BLE_MAX_ACT=0
+
+# Hanya satu aktivitas/connection BR/EDR
 CONFIG_BT_CTRL_BR_EDR_MAX_ACT=1
 CONFIG_BT_CTRL_BR_EDR_MAX_CONN=1
 
-# Reduce buffer sizes further
-CONFIG_BT_BLE_ACL_RX_BUFFERS=0
-CONFIG_BT_BLE_ACL_TX_BUFFERS=0
-CONFIG_BT_BR_ACL_RX_BUFFERS=2
-CONFIG_BT_BR_ACL_TX_BUFFERS=2
 
-# Disable task watchdog during long operations
-CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+# ------------------------------------------------------------
+# ACL BUFFERS
+# ------------------------------------------------------------
 
-# Optimize for size
-CONFIG_COMPILER_OPTIMIZATION_SIZE=y
-CONFIG_COMPILER_OPTIMIZATION_DEFAULT=n
+# Minimal yang masih cukup untuk A2DP
+CONFIG_BT_BR_ACL_RX_BUFFERS=4
+CONFIG_BT_BR_ACL_TX_BUFFERS=4
 
-# Custom partition TARS
-CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/TARS_ESP32_A2DP/partitions.csv"
 
-# Memory Management
+# ------------------------------------------------------------
+# MEMORY
+# ------------------------------------------------------------
+
+# Jangan reserve DRAM Bluetooth secara statis jika konfigurasi
+# IDF/port mendukung dynamic allocation
+CONFIG_BT_RESERVE_DRAM=0
+
+# Tidak ada PSRAM
 CONFIG_SPIRAM=n
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=n
 
-# Additional memory optimizations
+
+# ------------------------------------------------------------
+# DISABLE UNUSED BT FEATURES
+# ------------------------------------------------------------
+
+CONFIG_BT_SMP_ENABLE=n
+CONFIG_BT_GAP_VIRTUAL_ADV_ENABLE=n
+
+
+# ------------------------------------------------------------
+# LOGGING
+# ------------------------------------------------------------
+
 CONFIG_BT_LOG_HCI_TRACE_LEVEL=0
 CONFIG_BT_LOG_BTM_TRACE_LEVEL=0
 CONFIG_BT_LOG_L2CAP_TRACE_LEVEL=0
 CONFIG_BT_LOG_RFCOMM_TRACE_LEVEL=0
+
+
+# ------------------------------------------------------------
+# TLS / HTTPS
+# ------------------------------------------------------------
+
+CONFIG_MBEDTLS_SSL_ALPN=y
+
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=n
+
+CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
+
+
+# ------------------------------------------------------------
+# WATCHDOG
+# ------------------------------------------------------------
+
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+
+# ------------------------------------------------------------
+# COMPILER
+# ------------------------------------------------------------
+
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_COMPILER_OPTIMIZATION_DEFAULT=n
+
+
+# ------------------------------------------------------------
+# PARTITION
+# ------------------------------------------------------------
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/TARS_ESP32_A2DP/partitions.csv"
