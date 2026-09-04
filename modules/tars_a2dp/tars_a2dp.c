@@ -27,7 +27,7 @@
    CLOUDFLARE TTS
 
    WORKER:
-   https://tars-cloud-v3.hilmane34.workers.dev/tts
+   https://tars-cloud-v1.hilmane34.workers.dev/tts
 
    REQUEST:
    POST /tts
@@ -66,6 +66,14 @@
 #define TARS_TTS_PARTITION_NAME "ttsdata"
 
 #define TARS_TTS_HEADER_DEBUG_SIZE 16
+
+
+/* =========================================================
+   BLUETOOTH MEMORY PROTECTION
+   ========================================================= */
+
+#define TARS_BT_MIN_HEAP    (80 * 1024)
+#define TARS_BT_MIN_LARGEST (16 * 1024)
 
 
 /* =========================================================
@@ -1522,6 +1530,95 @@ tars_reset_bluetooth_state(void)
 
 
 /* =========================================================
+   CHECK BLUETOOTH MEMORY
+   ========================================================= */
+
+static bool
+tars_try_start_bt(void)
+{
+    /*
+     * TARS only uses Bluetooth Classic A2DP.
+     * BLE memory is therefore not required.
+     */
+
+    esp_err_t release_ret =
+        esp_bt_controller_mem_release(
+            ESP_BT_MODE_BLE
+        );
+
+    if (
+        release_ret != ESP_OK &&
+        release_ret != ESP_ERR_INVALID_STATE
+    ) {
+
+        printf(
+            "TARS BT: BLE MEMORY RELEASE ERROR: %d\n",
+            (int)release_ret
+        );
+    }
+
+
+    size_t free_heap =
+        heap_caps_get_free_size(
+            MALLOC_CAP_8BIT
+        );
+
+    size_t largest_block =
+        heap_caps_get_largest_free_block(
+            MALLOC_CAP_8BIT
+        );
+
+
+    printf(
+        "TARS BT BEFORE START | "
+        "HEAP=%u | "
+        "LARGEST=%u | "
+        "MIN_HEAP=%u | "
+        "MIN_LARGEST=%u\n",
+
+        (unsigned int)free_heap,
+
+        (unsigned int)largest_block,
+
+        (unsigned int)TARS_BT_MIN_HEAP,
+
+        (unsigned int)TARS_BT_MIN_LARGEST
+    );
+
+
+    if (
+        free_heap <
+        TARS_BT_MIN_HEAP
+    ) {
+
+        printf(
+            "TARS: BT NOT STARTED - "
+            "FREE HEAP TOO LOW\n"
+        );
+
+        return false;
+    }
+
+
+    if (
+        largest_block <
+        TARS_BT_MIN_LARGEST
+    ) {
+
+        printf(
+            "TARS: BT NOT STARTED - "
+            "INSUFFICIENT CONTIGUOUS HEAP\n"
+        );
+
+        return false;
+    }
+
+
+    return true;
+}
+
+
+/* =========================================================
    START BLUETOOTH
    ========================================================= */
 
@@ -1529,6 +1626,7 @@ static mp_obj_t
 tars_a2dp_start(void)
 {
     esp_err_t ret;
+
 
     if (tars_tts_loading) {
 
@@ -1540,6 +1638,7 @@ tars_a2dp_start(void)
         );
     }
 
+
     if (tars_bt_stopping) {
 
         return mp_obj_new_str(
@@ -1549,6 +1648,7 @@ tars_a2dp_start(void)
             )
         );
     }
+
 
     if (tars_bt_started) {
 
@@ -1560,10 +1660,68 @@ tars_a2dp_start(void)
         );
     }
 
+
+    /* =====================================================
+       CHECK MEMORY BEFORE STARTING BLUETOOTH
+       ===================================================== */
+
+    if (!tars_try_start_bt()) {
+
+        size_t free_heap =
+            heap_caps_get_free_size(
+                MALLOC_CAP_8BIT
+            );
+
+        size_t largest_block =
+            heap_caps_get_largest_free_block(
+                MALLOC_CAP_8BIT
+            );
+
+        char result[180];
+
+        snprintf(
+            result,
+            sizeof(result),
+
+            "ERROR: BT MEMORY LOW | "
+            "HEAP:%u | "
+            "LARGEST:%u",
+
+            (unsigned int)free_heap,
+
+            (unsigned int)largest_block
+        );
+
+        tars_status_text =
+            "BT START BLOCKED LOW MEMORY";
+
+        return mp_obj_new_str(
+            result,
+            strlen(
+                result
+            )
+        );
+    }
+
+
+    /* =====================================================
+       RESET STATE
+       ===================================================== */
+
     tars_reset_bluetooth_state();
+
+
+    /* =====================================================
+       CONTROLLER CONFIG
+       ===================================================== */
 
     esp_bt_controller_config_t bt_cfg =
         BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+
+
+    /* =====================================================
+       BT CONTROLLER INIT
+       ===================================================== */
 
     ret =
         esp_bt_controller_init(
@@ -1572,6 +1730,9 @@ tars_a2dp_start(void)
 
     if (ret != ESP_OK) {
 
+        tars_status_text =
+            "BT CONTROLLER INIT FAILED";
+
         return mp_obj_new_str(
             "ERROR: BT CONTROLLER INIT FAILED",
             strlen(
@@ -1579,6 +1740,11 @@ tars_a2dp_start(void)
             )
         );
     }
+
+
+    /* =====================================================
+       ENABLE CLASSIC BT ONLY
+       ===================================================== */
 
     ret =
         esp_bt_controller_enable(
@@ -1589,6 +1755,9 @@ tars_a2dp_start(void)
 
         esp_bt_controller_deinit();
 
+        tars_status_text =
+            "BT CONTROLLER ENABLE FAILED";
+
         return mp_obj_new_str(
             "ERROR: BT CONTROLLER ENABLE FAILED",
             strlen(
@@ -1596,6 +1765,11 @@ tars_a2dp_start(void)
             )
         );
     }
+
+
+    /* =====================================================
+       BLUEDROID INIT
+       ===================================================== */
 
     ret =
         esp_bluedroid_init();
@@ -1606,6 +1780,9 @@ tars_a2dp_start(void)
 
         esp_bt_controller_deinit();
 
+        tars_status_text =
+            "BLUEDROID INIT FAILED";
+
         return mp_obj_new_str(
             "ERROR: BLUEDROID INIT FAILED",
             strlen(
@@ -1613,6 +1790,11 @@ tars_a2dp_start(void)
             )
         );
     }
+
+
+    /* =====================================================
+       BLUEDROID ENABLE
+       ===================================================== */
 
     ret =
         esp_bluedroid_enable();
@@ -1625,6 +1807,9 @@ tars_a2dp_start(void)
 
         esp_bt_controller_deinit();
 
+        tars_status_text =
+            "BLUEDROID ENABLE FAILED";
+
         return mp_obj_new_str(
             "ERROR: BLUEDROID ENABLE FAILED",
             strlen(
@@ -1632,6 +1817,11 @@ tars_a2dp_start(void)
             )
         );
     }
+
+
+    /* =====================================================
+       GAP CALLBACK
+       ===================================================== */
 
     ret =
         esp_bt_gap_register_callback(
@@ -1648,6 +1838,9 @@ tars_a2dp_start(void)
 
         esp_bt_controller_deinit();
 
+        tars_status_text =
+            "GAP CALLBACK FAILED";
+
         return mp_obj_new_str(
             "ERROR: GAP CALLBACK FAILED",
             strlen(
@@ -1656,14 +1849,29 @@ tars_a2dp_start(void)
         );
     }
 
+
+    /* =====================================================
+       DEVICE NAME
+       ===================================================== */
+
     esp_bt_gap_set_device_name(
         TARS_DEVICE_NAME
     );
+
+
+    /* =====================================================
+       SCAN MODE
+       ===================================================== */
 
     esp_bt_gap_set_scan_mode(
         ESP_BT_CONNECTABLE,
         ESP_BT_NON_CONNECTABLE
     );
+
+
+    /* =====================================================
+       A2DP CALLBACK
+       ===================================================== */
 
     ret =
         esp_a2d_register_callback(
@@ -1680,6 +1888,9 @@ tars_a2dp_start(void)
 
         esp_bt_controller_deinit();
 
+        tars_status_text =
+            "A2DP CALLBACK FAILED";
+
         return mp_obj_new_str(
             "ERROR: A2DP CALLBACK FAILED",
             strlen(
@@ -1687,6 +1898,11 @@ tars_a2dp_start(void)
             )
         );
     }
+
+
+    /* =====================================================
+       A2DP SOURCE INIT
+       ===================================================== */
 
     ret =
         esp_a2d_source_init();
@@ -1701,6 +1917,9 @@ tars_a2dp_start(void)
 
         esp_bt_controller_deinit();
 
+        tars_status_text =
+            "A2DP SOURCE INIT FAILED";
+
         return mp_obj_new_str(
             "ERROR: A2DP SOURCE INIT FAILED",
             strlen(
@@ -1708,6 +1927,11 @@ tars_a2dp_start(void)
             )
         );
     }
+
+
+    /* =====================================================
+       AUDIO CALLBACK
+       ===================================================== */
 
     ret =
         esp_a2d_source_register_data_callback(
@@ -1726,6 +1950,9 @@ tars_a2dp_start(void)
 
         esp_bt_controller_deinit();
 
+        tars_status_text =
+            "AUDIO CALLBACK FAILED";
+
         return mp_obj_new_str(
             "ERROR: AUDIO CALLBACK FAILED",
             strlen(
@@ -1734,19 +1961,64 @@ tars_a2dp_start(void)
         );
     }
 
+
+    /* =====================================================
+       SUCCESS
+       ===================================================== */
+
     tars_bt_started =
         true;
 
     tars_bt_stopping =
         false;
 
+
+    size_t free_heap_after =
+        heap_caps_get_free_size(
+            MALLOC_CAP_8BIT
+        );
+
+    size_t largest_block_after =
+        heap_caps_get_largest_free_block(
+            MALLOC_CAP_8BIT
+        );
+
+
+    printf(
+        "TARS BT STARTED | "
+        "HEAP=%u | "
+        "LARGEST=%u\n",
+
+        (unsigned int)free_heap_after,
+
+        (unsigned int)largest_block_after
+    );
+
+
     tars_status_text =
         "TARS BLUETOOTH READY";
 
+
+    char result[180];
+
+    snprintf(
+        result,
+        sizeof(result),
+
+        "TARS BLUETOOTH CLASSIC A2DP READY | "
+        "HEAP:%u | "
+        "LARGEST:%u",
+
+        (unsigned int)free_heap_after,
+
+        (unsigned int)largest_block_after
+    );
+
+
     return mp_obj_new_str(
-        "TARS BLUETOOTH CLASSIC A2DP READY",
+        result,
         strlen(
-            "TARS BLUETOOTH CLASSIC A2DP READY"
+            result
         )
     );
 }
