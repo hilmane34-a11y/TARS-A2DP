@@ -56,53 +56,6 @@ jobs:
           cd esp-idf
           ./install.sh esp32
 
-      - name: Install ESP Audio Codec MP3
-        shell: bash
-        run: |
-          AUDIO_CODEC="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
-
-          echo "========================================"
-          echo "INSTALL ESP AUDIO CODEC 2.6.2"
-          echo "========================================"
-
-          if [ -d "$AUDIO_CODEC" ]; then
-            rm -rf "$AUDIO_CODEC"
-          fi
-
-          git clone \
-            --depth 1 \
-            --branch v2.6.2 \
-            https://github.com/espressif/esp_audio_codec.git \
-            "$AUDIO_CODEC"
-
-          echo ""
-          echo "ESP AUDIO CODEC:"
-          git -C "$AUDIO_CODEC" describe --tags --always || true
-
-          echo ""
-          echo "VERIFY MP3 DECODER:"
-
-          if [ -f "$AUDIO_CODEC/include/esp_audio_simple_dec.h" ]; then
-            echo "FOUND: esp_audio_simple_dec.h"
-          else
-            echo "ERROR: esp_audio_simple_dec.h NOT FOUND"
-            exit 1
-          fi
-
-          if grep -Rqs \
-            "ESP_AUDIO_SIMPLE_DEC_TYPE_MP3" \
-            "$AUDIO_CODEC/include" \
-            "$AUDIO_CODEC/src"; then
-
-            echo "FOUND: MP3 SIMPLE DECODER"
-
-          else
-
-            echo "ERROR: MP3 DECODER NOT FOUND"
-            exit 1
-
-          fi
-
       - name: Build mpy-cross
         run: |
           cd micropython
@@ -219,50 +172,37 @@ jobs:
 
           cat >> "$BOARD" << 'EOF'
 
-          # WiFi cache/IRAM stability
-          # Keep frequently used WiFi functions in IRAM.
+          # WiFi cache safety
           CONFIG_ESP_WIFI_IRAM_OPT=y
-
-          # Keep WiFi RX path in IRAM.
           CONFIG_ESP_WIFI_RX_IRAM_OPT=y
-
-          # Do not consume additional IRAM unnecessarily.
           CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n
           EOF
 
           echo ""
-          echo "FINAL WIFI IRAM CONFIG:"
+          echo "WIFI IRAM CONFIG:"
           grep -n \
             -E "CONFIG_ESP_WIFI_(IRAM_OPT|RX_IRAM_OPT|EXTRA_IRAM_OPT)" \
             "$BOARD" || true
 
-          echo ""
-
           if ! grep -q \
             "^CONFIG_ESP_WIFI_IRAM_OPT=y" \
             "$BOARD"; then
-
-            echo "ERROR: CONFIG_ESP_WIFI_IRAM_OPT NOT ENABLED"
+            echo "ERROR: WIFI IRAM OPT NOT ENABLED"
             exit 1
-
           fi
 
           if ! grep -q \
             "^CONFIG_ESP_WIFI_RX_IRAM_OPT=y" \
             "$BOARD"; then
-
-            echo "ERROR: CONFIG_ESP_WIFI_RX_IRAM_OPT NOT ENABLED"
+            echo "ERROR: WIFI RX IRAM OPT NOT ENABLED"
             exit 1
-
           fi
 
           if ! grep -q \
             "^CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n" \
             "$BOARD"; then
-
-            echo "ERROR: CONFIG_ESP_WIFI_EXTRA_IRAM_OPT NOT DISABLED"
+            echo "ERROR: WIFI EXTRA IRAM OPT NOT DISABLED"
             exit 1
-
           fi
 
           echo "WIFI IRAM CONFIG SUCCESS"
@@ -368,6 +308,152 @@ jobs:
 
           fi
 
+      - name: Install ESP Audio Codec through Component Manager
+        shell: bash
+        run: |
+          set -e
+
+          IDF="$GITHUB_WORKSPACE/esp-idf"
+          COMPONENT="$IDF/components/tars_audio_dependency"
+
+          echo "========================================"
+          echo "ESP AUDIO CODEC COMPONENT MANAGER"
+          echo "========================================"
+
+          rm -rf "$COMPONENT"
+
+          mkdir -p "$COMPONENT"
+
+          cat > "$COMPONENT/idf_component.yml" << 'EOF'
+          dependencies:
+            espressif/esp_audio_codec:
+              version: "2.6.2"
+          EOF
+
+          cat > "$COMPONENT/CMakeLists.txt" << 'EOF'
+          idf_component_register(
+              SRCS "tars_audio_dependency.c"
+          )
+
+          target_link_libraries(${COMPONENT_LIB} INTERFACE
+              __idf_esp_audio_codec
+          )
+          EOF
+
+          cat > "$COMPONENT/tars_audio_dependency.c" << 'EOF'
+          void tars_audio_dependency_dummy(void)
+          {
+          }
+          EOF
+
+          echo ""
+          echo "MANIFEST:"
+          cat "$COMPONENT/idf_component.yml"
+
+          echo ""
+          echo "CMAKE:"
+          cat "$COMPONENT/CMakeLists.txt"
+
+          echo ""
+          echo "DUMMY SOURCE:"
+          cat "$COMPONENT/tars_audio_dependency.c"
+
+          echo ""
+          echo "COMPONENT MANIFEST CREATED"
+          echo "ESP-IDF Component Manager will resolve:"
+          echo "espressif/esp_audio_codec 2.6.2"
+
+      - name: Verify ESP Audio Codec dependency
+        shell: bash
+        run: |
+          IDF="$GITHUB_WORKSPACE/esp-idf"
+          COMPONENT="$IDF/components/tars_audio_dependency"
+
+          echo "========================================"
+          echo "VERIFY AUDIO CODEC DEPENDENCY"
+          echo "========================================"
+
+          if [ ! -f "$COMPONENT/idf_component.yml" ]; then
+            echo "ERROR: MANIFEST NOT FOUND"
+            exit 1
+          fi
+
+          if ! grep -q \
+            "espressif/esp_audio_codec" \
+            "$COMPONENT/idf_component.yml"; then
+            echo "ERROR: ESP AUDIO CODEC DEPENDENCY NOT FOUND"
+            exit 1
+          fi
+
+          if ! grep -q \
+            'version: "2.6.2"' \
+            "$COMPONENT/idf_component.yml"; then
+            echo "ERROR: ESP AUDIO CODEC VERSION 2.6.2 NOT FOUND"
+            exit 1
+          fi
+
+          echo "MANIFEST CHECK: OK"
+
+          echo ""
+          echo "ESP-IDF COMPONENT DIRECTORY:"
+          ls -la "$IDF/components" | head -n 30
+
+      - name: Patch TARS CMake for MP3
+        shell: bash
+        run: |
+          CMAKE_FILE="$GITHUB_WORKSPACE/modules/tars_a2dp/micropython.cmake"
+
+          echo "========================================"
+          echo "CHECK TARS A2DP CMAKE"
+          echo "========================================"
+
+          if [ ! -f "$CMAKE_FILE" ]; then
+            echo "ERROR: tars_a2dp/micropython.cmake NOT FOUND"
+            exit 1
+          fi
+
+          echo ""
+          echo "CURRENT CMAKE:"
+          cat "$CMAKE_FILE"
+
+          if grep -q \
+            "__idf_esp_audio_codec" \
+            "$CMAKE_FILE"; then
+
+            echo ""
+            echo "ESP AUDIO CODEC LINK ALREADY PRESENT"
+
+          else
+
+            cat >> "$CMAKE_FILE" << 'EOF'
+
+          # ESP Audio Codec MP3 decoder
+          target_link_libraries(usermod_tars_a2dp INTERFACE
+              __idf_esp_audio_codec
+          )
+          EOF
+
+            echo ""
+            echo "TEMPORARY MP3 LINK ADDED"
+
+          fi
+
+          echo ""
+          echo "FINAL CMAKE FOR BUILD:"
+          cat "$CMAKE_FILE"
+
+          if ! grep -q \
+            "__idf_esp_audio_codec" \
+            "$CMAKE_FILE"; then
+
+            echo "ERROR: ESP AUDIO CODEC LINK NOT FOUND"
+            exit 1
+
+          fi
+
+          echo ""
+          echo "TARS CMAKE MP3 LINK: OK"
+
       - name: Patch A2DP queue
         shell: bash
         run: |
@@ -420,56 +506,36 @@ jobs:
           else
 
             echo "ERROR: A2DP QUEUE PATCH FAILED"
-
-            grep -n \
-              "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-              "$A2DP_FILE" || true
-
             exit 1
 
           fi
 
-      - name: Verify MP3 component before build
+      - name: Prepare MP3 Component Manager environment
         shell: bash
         run: |
-          AUDIO_CODEC="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
+          set -e
+
+          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           echo "========================================"
-          echo "VERIFY ESP AUDIO CODEC"
+          echo "CHECK COMPONENT MANAGER"
           echo "========================================"
 
-          if [ ! -d "$AUDIO_CODEC" ]; then
-            echo "ERROR: ESP AUDIO CODEC DIRECTORY MISSING"
-            exit 1
-          fi
+          echo ""
+          echo "IDF VERSION:"
+          idf.py --version
 
           echo ""
-          echo "COMPONENT:"
-          ls -la "$AUDIO_CODEC"
+          echo "COMPOTE VERSION:"
+          compote --version || true
 
           echo ""
-          echo "CMAKE:"
-          if [ -f "$AUDIO_CODEC/CMakeLists.txt" ]; then
-            echo "CMakeLists.txt OK"
-          else
-            echo "ERROR: CMakeLists.txt NOT FOUND"
-            exit 1
-          fi
+          echo "COMPONENT MANIFEST:"
+          cat \
+            "$GITHUB_WORKSPACE/esp-idf/components/tars_audio_dependency/idf_component.yml"
 
           echo ""
-          echo "MP3 HEADER:"
-          find "$AUDIO_CODEC" \
-            -name "esp_audio_simple_dec.h" \
-            -print
-
-          echo ""
-          echo "MP3 SYMBOL:"
-          grep -R \
-            -n \
-            "ESP_AUDIO_SIMPLE_DEC_TYPE_MP3" \
-            "$AUDIO_CODEC/include" \
-            "$AUDIO_CODEC/src" \
-            2>/dev/null | head -n 10 || true
+          echo "Component Manager will resolve the MP3 decoder during CMake configuration."
 
       - name: Build TARS firmware
         shell: bash
@@ -494,6 +560,7 @@ jobs:
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
+          IDF="$GITHUB_WORKSPACE/esp-idf"
 
           echo "========================================"
           echo "FINAL SDKCONFIG WIFI / HTTPS / TLS"
@@ -529,13 +596,6 @@ jobs:
               -E "^(CONFIG_MBEDTLS_SSL|# CONFIG_MBEDTLS_SSL|CONFIG_MBEDTLS_TLS|# CONFIG_MBEDTLS_TLS)" \
               "$BUILD/sdkconfig" || true
 
-            echo ""
-            echo "----- KEY EXCHANGE -----"
-
-            grep -n \
-              -E "^(CONFIG_MBEDTLS_KEY_EXCHANGE|# CONFIG_MBEDTLS_KEY_EXCHANGE)" \
-              "$BUILD/sdkconfig" || true
-
           else
 
             echo "SDKCONFIG NOT FOUND"
@@ -544,27 +604,41 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "ESP AUDIO CODEC CHECK"
+          echo "ESP AUDIO CODEC COMPONENT CHECK"
           echo "========================================"
 
-          AUDIO_CODEC="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
+          MANAGED="$IDF/components/tars_audio_dependency/managed_components"
+          GLOBAL_MANAGED="$IDF/managed_components"
 
-          if [ -d "$AUDIO_CODEC" ]; then
-            echo "ESP AUDIO CODEC DIRECTORY: OK"
+          echo ""
+          echo "TARS AUDIO DEPENDENCY:"
+          ls -la \
+            "$IDF/components/tars_audio_dependency" \
+            2>/dev/null || true
 
-            git -C "$AUDIO_CODEC" describe --tags --always || true
+          echo ""
+          echo "GLOBAL MANAGED COMPONENTS:"
+          ls -la \
+            "$GLOBAL_MANAGED" \
+            2>/dev/null || true
 
-            echo ""
-            echo "MP3 HEADER:"
-            find "$AUDIO_CODEC" \
-              -name "esp_audio_simple_dec.h" \
-              -print || true
+          echo ""
+          echo "SEARCH ESP AUDIO CODEC:"
 
-          else
+          find "$IDF" \
+            -type f \
+            -name "esp_audio_simple_dec.h" \
+            -print \
+            2>/dev/null || true
 
-            echo "ESP AUDIO CODEC DIRECTORY NOT FOUND"
+          echo ""
+          echo "SEARCH MP3 SYMBOL:"
 
-          fi
+          grep -R \
+            -n \
+            "ESP_AUDIO_SIMPLE_DEC_TYPE_MP3" \
+            "$IDF" \
+            2>/dev/null | head -n 20 || true
 
           echo ""
           echo "========================================"
@@ -604,9 +678,17 @@ jobs:
           echo "LAST BUILD LOG"
           echo "========================================"
 
-          tail -n 150 \
-            "$GITHUB_WORKSPACE/tars_build.log" \
-            || true
+          if [ -f "$GITHUB_WORKSPACE/tars_build.log" ]; then
+
+            tail -n 200 \
+              "$GITHUB_WORKSPACE/tars_build.log"
+
+          else
+
+            echo "tars_build.log NOT FOUND"
+            echo "BUILD STEP DID NOT START OR FAILED BEFORE LOG CREATION"
+
+          fi
 
       - name: Prepare firmware
         shell: bash
