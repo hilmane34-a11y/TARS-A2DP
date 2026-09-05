@@ -1,4 +1,4 @@
-name: Build TARS MicroPython ESP32 A2DP MP3
+name: Build TARS V1 Man RAM LOW ESP32 A2DP MP3
 
 on:
   workflow_dispatch:
@@ -70,53 +70,49 @@ jobs:
 
           make -C ports/esp32 submodules
 
-      - name: Install ESP Audio Codec MP3
+      - name: Install ESP Audio Codec 2.6.2
         shell: bash
         run: |
           set -e
 
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
-          COMPONENT_DIR="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
+          cd "$GITHUB_WORKSPACE"
 
           echo "========================================"
           echo "INSTALL ESP AUDIO CODEC 2.6.2"
           echo "========================================"
 
-          rm -rf "$COMPONENT_DIR"
-
-          mkdir -p "$COMPONENT_DIR"
+          mkdir -p esp-idf/components
 
           python3 -m pip install --upgrade \
             idf-component-manager
 
-          cd "$GITHUB_WORKSPACE/esp-idf/components"
+          cd esp-idf/components
+
+          rm -rf esp_audio_codec
+
+          mkdir -p esp_audio_codec
 
           cat > esp_audio_codec/idf_component.yml << 'EOF'
           dependencies:
-            espressif/esp_audio_codec:
-              version: "2.6.2"
+            espressif/esp_audio_codec: "2.6.2"
           EOF
 
           echo ""
-          echo "MANIFEST:"
-          cat "$COMPONENT_DIR/idf_component.yml"
+          echo "ESP AUDIO CODEC MANIFEST:"
+          cat esp_audio_codec/idf_component.yml
 
           echo ""
-          echo "DOWNLOAD ESP AUDIO CODEC"
+          echo "INSTALLING MANAGED COMPONENT..."
 
           cd "$GITHUB_WORKSPACE/esp-idf"
 
-          python3 -m idf_component_manager \
-            --help || true
+          idf.py reconfigure \
+            --preview
 
           echo ""
-          echo "TRY COMPONENT DOWNLOAD"
-
-          compote component download \
-            espressif/esp_audio_codec \
-            --version 2.6.2 \
-            --path "$COMPONENT_DIR"
+          echo "ESP AUDIO CODEC INSTALL FINISHED"
 
       - name: Verify ESP Audio Codec
         shell: bash
@@ -130,45 +126,32 @@ jobs:
           echo "========================================"
 
           if [ ! -d "$CODEC" ]; then
-            echo "ERROR: esp_audio_codec DIRECTORY NOT FOUND"
+            echo "ERROR: ESP AUDIO CODEC NOT FOUND"
             exit 1
           fi
 
-          echo ""
           echo "CODEC DIRECTORY:"
           ls -la "$CODEC"
 
           echo ""
-          echo "MP3 / AUDIO HEADERS:"
+          echo "MP3 HEADERS:"
 
           find "$CODEC" \
             -type f \
             \( \
               -name "esp_audio_dec_default.h" \
-              -o \
-              -name "esp_audio_simple_dec.h" \
-              -o \
-              -name "esp_audio_simple_dec_default.h" \
+              -o -name "esp_audio_simple_dec.h" \
+              -o -name "esp_audio_simple_dec_default.h" \
             \) \
             -print
 
           echo ""
-          echo "MP3 SOURCE FILES:"
+          echo "MP3 FILES:"
 
           find "$CODEC" \
             -type f \
             -iname "*mp3*" \
-            | head -n 100
-
-          echo ""
-          echo "CMAKE:"
-
-          if [ -f "$CODEC/CMakeLists.txt" ]; then
-            cat "$CODEC/CMakeLists.txt"
-          else
-            echo "ERROR: CMakeLists.txt NOT FOUND"
-            exit 1
-          fi
+            | head -n 50
 
       - name: Apply esp32_rmt.c fix
         shell: bash
@@ -184,32 +167,32 @@ jobs:
             exit 1
           fi
 
-          echo "BEFORE PATCH:"
-          grep -n "resolution_hz" "$RMT_FILE" || true
+          if grep -q \
+            "mp_uint_t resolution_hz = 1000000;" \
+            "$RMT_FILE"; then
 
-          if grep -q "mp_uint_t resolution_hz = 1000000;" "$RMT_FILE"; then
             echo "RMT ALREADY PATCHED"
 
-          elif grep -q "mp_uint_t resolution_hz;" "$RMT_FILE"; then
+          elif grep -q \
+            "mp_uint_t resolution_hz;" \
+            "$RMT_FILE"; then
+
             sed -i \
               's/mp_uint_t resolution_hz;/mp_uint_t resolution_hz = 1000000;/' \
               "$RMT_FILE"
 
           else
-            echo "ERROR: EXPECTED resolution_hz DECLARATION NOT FOUND"
-            grep -n "resolution_hz" "$RMT_FILE" || true
-            exit 1
-          fi
 
-          echo ""
-          echo "AFTER PATCH:"
-          grep -n "resolution_hz" "$RMT_FILE" || true
+            echo "ERROR: resolution_hz DECLARATION NOT FOUND"
+            exit 1
+
+          fi
 
           if grep -q \
             "mp_uint_t resolution_hz = 1000000;" \
             "$RMT_FILE"; then
 
-            echo "PATCH SUCCESS"
+            echo "RMT PATCH SUCCESS"
 
           else
 
@@ -247,17 +230,32 @@ jobs:
 
           ls -la "$BOARD_DIR"
 
-      - name: Enable HTTPS Certificate Bundle
+      - name: Configure RAM LOW
         shell: bash
         run: |
           BOARD="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth"
 
+          echo "========================================"
+          echo "TARS RAM LOW CONFIGURATION"
+          echo "========================================"
+
+          # Jangan menggunakan Wi-Fi IRAM optimization.
+          sed -i '/CONFIG_ESP_WIFI_IRAM_OPT=/d' "$BOARD"
+          sed -i '/CONFIG_ESP_WIFI_RX_IRAM_OPT=/d' "$BOARD"
+          sed -i '/CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=/d' "$BOARD"
+
+          # HTTPS certificate bundle.
+          sed -i '/CONFIG_MBEDTLS_SSL_ALPN=/d' "$BOARD"
           sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=/d' "$BOARD"
           sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=/d' "$BOARD"
           sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=/d' "$BOARD"
           sed -i '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
 
           cat >> "$BOARD" << 'EOF'
+
+          # TARS RAM LOW
+          # Wi-Fi IRAM optimization intentionally disabled.
+
           CONFIG_MBEDTLS_SSL_ALPN=y
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
@@ -265,12 +263,18 @@ jobs:
           CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
           EOF
 
-          echo "HTTPS CONFIG ADDED"
+          echo ""
+          echo "RAM LOW CONFIG:"
+          tail -n 25 "$BOARD"
 
-      - name: Patch requests HTTPS backend to ssl
+      - name: Patch requests HTTPS backend
         shell: bash
         run: |
           REQ="$GITHUB_WORKSPACE/micropython/lib/micropython-lib/python-ecosys/requests/requests/__init__.py"
+
+          echo "========================================"
+          echo "PATCH REQUESTS HTTPS"
+          echo "========================================"
 
           if [ ! -f "$REQ" ]; then
             echo "ERROR: REQUESTS FILE NOT FOUND"
@@ -314,7 +318,8 @@ jobs:
 
           grep -n \
             "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE" || true
+            "$A2DP_FILE" \
+            || true
 
       - name: Verify TARS MP3 module
         shell: bash
@@ -339,7 +344,7 @@ jobs:
           fi
 
           echo ""
-          echo "----- CMAKE -----"
+          echo "----- MICROPYTHON CMAKE -----"
           cat "$CMAKE_FILE"
 
           echo ""
@@ -352,7 +357,7 @@ jobs:
             || true
 
           echo ""
-          echo "----- CHECK LINK -----"
+          echo "----- AUDIO CODEC LINK -----"
 
           if grep -q \
             "__idf_esp_audio_codec" \
@@ -385,52 +390,46 @@ jobs:
             2>&1 | tee \
             "$GITHUB_WORKSPACE/tars_build.log"
 
-      - name: Diagnose build
+      - name: RAM and MP3 diagnostics
         if: always()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
           echo "========================================"
-          echo "TARS BUILD DIAGNOSTIC"
+          echo "TARS RAM LOW DIAGNOSTIC"
           echo "========================================"
 
           echo ""
-          echo "----- AUDIO CODEC -----"
+          echo "----- FIRMWARE SIZE -----"
 
-          find \
-            "$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec" \
-            -type f \
-            | head -n 100 \
-            || true
+          if [ -f "$BUILD/firmware.bin" ]; then
+            ls -lh "$BUILD/firmware.bin"
+          else
+            echo "FIRMWARE NOT FOUND"
+          fi
 
           echo ""
-          echo "----- MODULES -----"
+          echo "----- MEMORY MAP -----"
+
+          find "$BUILD" \
+            -maxdepth 3 \
+            -type f \
+            \( \
+              -name "*.map" \
+              -o -name "sdkconfig" \
+            \) \
+            -print \
+            | head -n 50
+
+          echo ""
+          echo "----- TARS MODULES -----"
 
           if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
             grep -n \
               -E "tars_a2dp|tars_bluetooth" \
               "$BUILD/genhdr/moduledefs.collected" \
               || true
-          fi
-
-          echo ""
-          echo "----- SDKCONFIG AUDIO / BT -----"
-
-          if [ -f "$BUILD/sdkconfig" ]; then
-            grep -n \
-              -E "^(CONFIG_BT|CONFIG_A2DP|CONFIG_ESP_AUDIO)" \
-              "$BUILD/sdkconfig" \
-              || true
-          fi
-
-          echo ""
-          echo "----- FIRMWARE -----"
-
-          if [ -f "$BUILD/firmware.bin" ]; then
-            ls -lh "$BUILD/firmware.bin"
-          else
-            echo "FIRMWARE NOT FOUND"
           fi
 
           echo ""
@@ -454,7 +453,11 @@ jobs:
 
           cp \
             "$BUILD/firmware.bin" \
-            "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP-MP3.bin"
+            "$GITHUB_WORKSPACE/output/TARS-RAM-LOW-A2DP-MP3.bin"
+
+          echo "========================================"
+          echo "OUTPUT"
+          echo "========================================"
 
           ls -lh \
             "$GITHUB_WORKSPACE/output"
@@ -462,14 +465,14 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: TARS-MicroPython-ESP32-A2DP-MP3
-          path: output/TARS-MicroPython-ESP32-A2DP-MP3.bin
+          name: TARS-RAM-LOW-A2DP-MP3
+          path: output/TARS-RAM-LOW-A2DP-MP3.bin
           if-no-files-found: error
 
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: TARS-Build-Log
+          name: TARS-RAM-LOW-Build-Log
           path: tars_build.log
           if-no-files-found: warn
