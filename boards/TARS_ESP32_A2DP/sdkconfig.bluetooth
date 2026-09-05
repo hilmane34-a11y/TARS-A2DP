@@ -1,14 +1,13 @@
 CONFIG_BT_ENABLED=y
-
 CONFIG_BT_BLUEDROID_ENABLED=y
 CONFIG_BT_CLASSIC_ENABLED=y
 CONFIG_BT_A2DP_ENABLE=y
 
-# A2DP Audio Streaming Configuration
+# A2DP Audio Streaming
 CONFIG_A2D_DYNAMIC_MEMORY=y
 CONFIG_A2D_SBC_ENCODER_INCLUDED=y
 
-# Memory optimized SBC configuration
+# Memory optimized SBC
 CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE=2048
 CONFIG_A2DP_SBC_BUFFER_POOL_SIZE=10
 
@@ -29,37 +28,32 @@ CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=n
 CONFIG_BT_CLASSIC_QNUM_LINKS=1
 CONFIG_BT_L2CAP_CHANNELS_NUM=4
 
-# Reduce BLE overhead if using BR/EDR only
+# BLE OFF - TARS uses Classic Bluetooth A2DP
 CONFIG_BT_BLE_ENABLED=n
 
-# HTTPS / TLS untuk TARS Cloud TTS
-CONFIG_MBEDTLS_SSL_ALPN=y
+# WiFi cache safety
+CONFIG_ESP_WIFI_IRAM_OPT=y
+CONFIG_ESP_WIFI_RX_IRAM_OPT=y
+CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n
 
-# Certificate Bundle
+# HTTPS / TLS
+CONFIG_MBEDTLS_SSL_ALPN=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=n
-
-# Aktifkan certificate bundle untuk HTTPS client
 CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
 
-# ============================================================
-# MEMORY OPTIMIZATION
-# ============================================================
-
-# Reduce Bluetooth controller DRAM (sudah disable BLE)
+# Memory
 CONFIG_BT_RESERVE_DRAM=0
-
-# Disable task watchdog during long operations
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 
-# Optimize for speed vs size (balance)
+# Compiler
 CONFIG_COMPILER_OPTIMIZATION_DEFAULT=y
 CONFIG_COMPILER_OPTIMIZATION_SIZE=n
 
-# Custom partition TARS
+# Custom partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/TARS_ESP32_A2DP/partitions.csv"
 
-# Memory Management
+# No PSRAM
 CONFIG_SPIRAM=n
