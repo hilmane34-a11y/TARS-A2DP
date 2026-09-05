@@ -451,31 +451,63 @@ jobs:
       - name: Prepare firmware
         shell: bash
         run: |
+          set -e
+
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
+          OUTPUT="$GITHUB_WORKSPACE/output"
+
+          echo "========================================"
+          echo "LOCATING ESP32 FLASH FILES"
+          echo "========================================"
 
           if [ ! -f "$BUILD/firmware.bin" ]; then
             echo "ERROR: FIRMWARE.BIN NOT FOUND"
             exit 1
           fi
 
-          mkdir -p "$GITHUB_WORKSPACE/output"
+          BOOTLOADER="$(find "$BUILD" -type f -name 'bootloader.bin' | head -n 1)"
+          PARTITION="$(find "$BUILD" -type f -name 'partition-table.bin' | head -n 1)"
 
-          cp \
-            "$BUILD/firmware.bin" \
-            "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP.bin"
+          echo "BOOTLOADER: $BOOTLOADER"
+          echo "PARTITION : $PARTITION"
+          echo "FIRMWARE  : $BUILD/firmware.bin"
 
+          if [ -z "$BOOTLOADER" ] || [ ! -f "$BOOTLOADER" ]; then
+            echo "ERROR: BOOTLOADER.BIN NOT FOUND"
+            find "$BUILD" -type f -name "*.bin" -print
+            exit 1
+          fi
+
+          if [ -z "$PARTITION" ] || [ ! -f "$PARTITION" ]; then
+            echo "ERROR: PARTITION-TABLE.BIN NOT FOUND"
+            find "$BUILD" -type f -name "*.bin" -print
+            exit 1
+          fi
+
+          mkdir -p "$OUTPUT"
+
+          python3 -m pip install --disable-pip-version-check esptool
+
+          python3 -m esptool \
+            --chip esp32 \
+            merge_bin \
+            -o "$OUTPUT/TARS-FULL.bin" \
+            0x1000 "$BOOTLOADER" \
+            0x8000 "$PARTITION" \
+            0x10000 "$BUILD/firmware.bin"
+
+          echo ""
           echo "========================================"
-          echo "OUTPUT FIRMWARE"
+          echo "TARS FULL FIRMWARE"
           echo "========================================"
 
-          ls -lh \
-            "$GITHUB_WORKSPACE/output"
+          ls -lh "$OUTPUT/TARS-FULL.bin"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: TARS-MicroPython-ESP32-A2DP
-          path: output/TARS-MicroPython-ESP32-A2DP.bin
+          name: TARS-FULL-Firmware
+          path: output/TARS-FULL.bin
           if-no-files-found: error
 
       - name: Upload build log
