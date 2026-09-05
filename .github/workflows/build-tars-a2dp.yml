@@ -73,78 +73,102 @@ jobs:
       - name: Install ESP Audio Codec MP3
         shell: bash
         run: |
+          set -e
+
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
-          cd "$GITHUB_WORKSPACE"
+          COMPONENT_DIR="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
 
           echo "========================================"
-          echo "INSTALL ESP AUDIO CODEC"
+          echo "INSTALL ESP AUDIO CODEC 2.6.2"
           echo "========================================"
 
-          idf.py add-dependency \
-            "espressif/esp_audio_codec^2.6.2"
+          rm -rf "$COMPONENT_DIR"
+
+          mkdir -p "$COMPONENT_DIR"
+
+          python3 -m pip install --upgrade \
+            idf-component-manager
+
+          cd "$GITHUB_WORKSPACE/esp-idf/components"
+
+          cat > esp_audio_codec/idf_component.yml << 'EOF'
+          dependencies:
+            espressif/esp_audio_codec:
+              version: "2.6.2"
+          EOF
 
           echo ""
-          echo "========================================"
-          echo "ESP AUDIO CODEC INSTALLED"
-          echo "========================================"
+          echo "MANIFEST:"
+          cat "$COMPONENT_DIR/idf_component.yml"
 
-          find "$GITHUB_WORKSPACE" \
-            -maxdepth 4 \
-            -type d \
-            -name "esp_audio_codec" \
-            -print
+          echo ""
+          echo "DOWNLOAD ESP AUDIO CODEC"
 
-      - name: Verify MP3 decoder
+          cd "$GITHUB_WORKSPACE/esp-idf"
+
+          python3 -m idf_component_manager \
+            --help || true
+
+          echo ""
+          echo "TRY COMPONENT DOWNLOAD"
+
+          compote component download \
+            espressif/esp_audio_codec \
+            --version 2.6.2 \
+            --path "$COMPONENT_DIR"
+
+      - name: Verify ESP Audio Codec
         shell: bash
         run: |
+          set -e
+
+          CODEC="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
+
           echo "========================================"
-          echo "VERIFY MP3 DECODER"
+          echo "VERIFY ESP AUDIO CODEC"
           echo "========================================"
 
-          CODEC_DIR=""
-
-          CODEC_DIR=$(find \
-            "$GITHUB_WORKSPACE" \
-            -type d \
-            -name "esp_audio_codec" \
-            | head -n 1)
-
-          if [ -z "$CODEC_DIR" ]; then
-            echo "ERROR: esp_audio_codec NOT FOUND"
+          if [ ! -d "$CODEC" ]; then
+            echo "ERROR: esp_audio_codec DIRECTORY NOT FOUND"
             exit 1
           fi
 
-          echo "CODEC:"
-          echo "$CODEC_DIR"
+          echo ""
+          echo "CODEC DIRECTORY:"
+          ls -la "$CODEC"
 
           echo ""
-          echo "MP3 FILES:"
+          echo "MP3 / AUDIO HEADERS:"
 
-          find "$CODEC_DIR" \
+          find "$CODEC" \
             -type f \
             \( \
-              -iname "*mp3*" \
+              -name "esp_audio_dec_default.h" \
               -o \
-              -iname "*simple_dec*" \
-              -o \
-              -iname "*audio_dec*" \
-            \) \
-            | head -n 100
-
-          echo ""
-          echo "HEADER CHECK:"
-
-          find "$CODEC_DIR" \
-            -type f \
-            \( \
               -name "esp_audio_simple_dec.h" \
               -o \
               -name "esp_audio_simple_dec_default.h" \
-              -o \
-              -name "esp_audio_dec_default.h" \
             \) \
             -print
+
+          echo ""
+          echo "MP3 SOURCE FILES:"
+
+          find "$CODEC" \
+            -type f \
+            -iname "*mp3*" \
+            | head -n 100
+
+          echo ""
+          echo "CMAKE:"
+
+          if [ -f "$CODEC/CMakeLists.txt" ]; then
+            cat "$CODEC/CMakeLists.txt"
+          else
+            echo "ERROR: CMakeLists.txt NOT FOUND"
+            exit 1
+          fi
 
       - name: Apply esp32_rmt.c fix
         shell: bash
@@ -181,13 +205,17 @@ jobs:
           echo "AFTER PATCH:"
           grep -n "resolution_hz" "$RMT_FILE" || true
 
-          echo ""
+          if grep -q \
+            "mp_uint_t resolution_hz = 1000000;" \
+            "$RMT_FILE"; then
 
-          if grep -q "mp_uint_t resolution_hz = 1000000;" "$RMT_FILE"; then
-            echo "PATCH SUCCESS: resolution_hz INITIALIZED"
+            echo "PATCH SUCCESS"
+
           else
+
             echo "ERROR: RMT PATCH FAILED"
             exit 1
+
           fi
 
       - name: Install TARS board
@@ -230,81 +258,38 @@ jobs:
           sed -i '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
 
           cat >> "$BOARD" << 'EOF'
-          # HTTPS / TLS
           CONFIG_MBEDTLS_SSL_ALPN=y
-
-          # Certificate Bundle
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=n
-
-          # HTTPS client
           CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
           EOF
 
-          echo "========================================"
-          echo "TARS HTTPS CONFIG"
-          echo "========================================"
-
-          tail -n 25 "$BOARD"
+          echo "HTTPS CONFIG ADDED"
 
       - name: Patch requests HTTPS backend to ssl
         shell: bash
         run: |
           REQ="$GITHUB_WORKSPACE/micropython/lib/micropython-lib/python-ecosys/requests/requests/__init__.py"
-          UREQ="$GITHUB_WORKSPACE/micropython/lib/micropython-lib/micropython/urequests/urequests.py"
 
-          echo "========================================"
-          echo "SEARCHING REQUESTS SOURCES"
-          echo "========================================"
-
-          if [ -f "$REQ" ]; then
-            echo "$REQ"
-          else
+          if [ ! -f "$REQ" ]; then
             echo "ERROR: REQUESTS FILE NOT FOUND"
             exit 1
           fi
-
-          if [ -f "$UREQ" ]; then
-            echo "$UREQ"
-          else
-            echo "WARNING: UREQUESTS FILE NOT FOUND"
-          fi
-
-          echo ""
-          echo "========================================"
-          echo "PATCHING HTTPS BACKEND"
-          echo "========================================"
 
           sed -i -E \
             's/^([[:space:]]*)import[[:space:]]+tls[[:space:]]*$/\1import ssl as tls/' \
             "$REQ"
 
-          echo "REQUESTS PATCHED"
-
-          echo ""
-          echo "========================================"
-          echo "VERIFY REQUESTS PATCH"
-          echo "========================================"
-
-          if grep -q -E \
-            "^[[:space:]]*import[[:space:]]+tls[[:space:]]*$" \
-            "$REQ"; then
-
-            echo "ERROR: ORIGINAL TLS IMPORT STILL EXISTS"
-            exit 1
-
-          fi
-
           if grep -q -E \
             "^[[:space:]]*import[[:space:]]+ssl[[:space:]]+as[[:space:]]+tls" \
             "$REQ"; then
 
-            echo "PATCH SUCCESS: REQUESTS NOW USES SSL BACKEND"
+            echo "REQUESTS SSL PATCH SUCCESS"
 
           else
 
-            echo "ERROR: SSL PATCH NOT FOUND"
+            echo "ERROR: REQUESTS SSL PATCH FAILED"
             exit 1
 
           fi
@@ -323,57 +308,25 @@ jobs:
             exit 1
           fi
 
-          echo "BEFORE PATCH:"
+          sed -i \
+            's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
+            "$A2DP_FILE"
 
           grep -n \
             "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
             "$A2DP_FILE" || true
 
-          if grep -q \
-            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
-            "$A2DP_FILE"; then
-
-            echo "A2DP QUEUE ALREADY PATCHED TO 16"
-
-          else
-
-            sed -i \
-              's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
-              "$A2DP_FILE"
-
-          fi
-
-          echo ""
-          echo "AFTER PATCH:"
-
-          grep -n \
-            "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE" || true
-
-          echo ""
-
-          if grep -q \
-            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
-            "$A2DP_FILE"; then
-
-            echo "PATCH SUCCESS: A2DP QUEUE = 16"
-
-          else
-
-            echo "ERROR: A2DP QUEUE PATCH FAILED"
-            exit 1
-
-          fi
-
-      - name: Verify TARS MP3 module configuration
+      - name: Verify TARS MP3 module
         shell: bash
         run: |
-          echo "========================================"
-          echo "VERIFY TARS A2DP MODULE"
-          echo "========================================"
+          set -e
 
           CMAKE_FILE="$GITHUB_WORKSPACE/modules/tars_a2dp/micropython.cmake"
           SOURCE_FILE="$GITHUB_WORKSPACE/modules/tars_a2dp/tars_a2dp.c"
+
+          echo "========================================"
+          echo "VERIFY TARS MP3 MODULE"
+          echo "========================================"
 
           if [ ! -f "$CMAKE_FILE" ]; then
             echo "ERROR: micropython.cmake NOT FOUND"
@@ -386,7 +339,7 @@ jobs:
           fi
 
           echo ""
-          echo "----- MICROPYTHON.CMAKE -----"
+          echo "----- CMAKE -----"
           cat "$CMAKE_FILE"
 
           echo ""
@@ -399,17 +352,20 @@ jobs:
             || true
 
           echo ""
-          echo "----- ESP AUDIO LINK -----"
+          echo "----- CHECK LINK -----"
 
-          if grep -q "__idf_esp_audio_codec" "$CMAKE_FILE"; then
+          if grep -q \
+            "__idf_esp_audio_codec" \
+            "$CMAKE_FILE"; then
+
             echo "ESP AUDIO CODEC LINK FOUND"
+
           else
+
             echo "ERROR: ESP AUDIO CODEC LINK NOT FOUND"
             exit 1
-          fi
 
-          echo ""
-          echo "MP3 MODULE CHECK SUCCESS"
+          fi
 
       - name: Build TARS firmware
         shell: bash
@@ -429,26 +385,24 @@ jobs:
             2>&1 | tee \
             "$GITHUB_WORKSPACE/tars_build.log"
 
-      - name: Diagnose MP3 A2DP build
+      - name: Diagnose build
         if: always()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
           echo "========================================"
-          echo "TARS MP3 / A2DP DIAGNOSTIC"
+          echo "TARS BUILD DIAGNOSTIC"
           echo "========================================"
 
           echo ""
-          echo "----- SDKCONFIG AUDIO / BT -----"
+          echo "----- AUDIO CODEC -----"
 
-          if [ -f "$BUILD/sdkconfig" ]; then
-            grep -n \
-              -E "^(CONFIG_BT|CONFIG_AUDIO|CONFIG_ESP_AUDIO|CONFIG_A2DP|CONFIG_MBEDTLS)" \
-              "$BUILD/sdkconfig" \
-              | head -n 300 \
-              || true
-          fi
+          find \
+            "$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec" \
+            -type f \
+            | head -n 100 \
+            || true
 
           echo ""
           echo "----- MODULES -----"
@@ -458,24 +412,17 @@ jobs:
               -E "tars_a2dp|tars_bluetooth" \
               "$BUILD/genhdr/moduledefs.collected" \
               || true
-          else
-            echo "MODULEDEFS NOT FOUND"
           fi
 
           echo ""
-          echo "----- ESP AUDIO CODEC -----"
+          echo "----- SDKCONFIG AUDIO / BT -----"
 
-          find "$BUILD" \
-            -type f \
-            \( \
-              -iname "*esp_audio_codec*" \
-              -o \
-              -iname "*audio_simple_dec*" \
-              -o \
-              -iname "*mp3*" \
-            \) \
-            | head -n 100 \
-            || true
+          if [ -f "$BUILD/sdkconfig" ]; then
+            grep -n \
+              -E "^(CONFIG_BT|CONFIG_A2DP|CONFIG_ESP_AUDIO)" \
+              "$BUILD/sdkconfig" \
+              || true
+          fi
 
           echo ""
           echo "----- FIRMWARE -----"
@@ -508,10 +455,6 @@ jobs:
           cp \
             "$BUILD/firmware.bin" \
             "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP-MP3.bin"
-
-          echo "========================================"
-          echo "OUTPUT FIRMWARE"
-          echo "========================================"
 
           ls -lh \
             "$GITHUB_WORKSPACE/output"
