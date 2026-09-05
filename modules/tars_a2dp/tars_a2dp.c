@@ -20,11 +20,10 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
+#include "freertos/idf_additions.h"
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec_default.h"
 #include "esp_audio_simple_dec.h"
-
 /* =========================================================
    TARS V1 MANZ
    ESP32 + MICROPYTHON
