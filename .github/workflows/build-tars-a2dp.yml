@@ -23,11 +23,6 @@ jobs:
             libffi-dev libssl-dev \
             dfu-util libusb-1.0-0
 
-          python3 -m pip install \
-            --disable-pip-version-check \
-            --break-system-packages \
-            esptool
-
       - name: Clone MicroPython
         run: |
           git clone --depth 1 \
@@ -72,7 +67,6 @@ jobs:
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
-
           make -C ports/esp32 submodules
 
       - name: Apply esp32_rmt.c fix
@@ -110,8 +104,10 @@ jobs:
           echo "AFTER PATCH:"
           grep -n "resolution_hz" "$RMT_FILE" || true
 
+          echo ""
+
           if grep -q "mp_uint_t resolution_hz = 1000000;" "$RMT_FILE"; then
-            echo "PATCH SUCCESS"
+            echo "PATCH SUCCESS: resolution_hz INITIALIZED"
           else
             echo "ERROR: RMT PATCH FAILED"
             exit 1
@@ -157,7 +153,6 @@ jobs:
           sed -i '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
 
           cat >> "$BOARD" << 'EOF'
-
           # HTTPS / TLS untuk TARS Cloud TTS
           CONFIG_MBEDTLS_SSL_ALPN=y
 
@@ -183,47 +178,78 @@ jobs:
           UREQ="$GITHUB_WORKSPACE/micropython/lib/micropython-lib/micropython/urequests/urequests.py"
 
           echo "========================================"
-          echo "REQUESTS HTTPS PATCH"
+          echo "SEARCHING REQUESTS SOURCES"
           echo "========================================"
 
-          if [ ! -f "$REQ" ]; then
+          if [ -f "$REQ" ]; then
+            echo "$REQ"
+          else
             echo "ERROR: REQUESTS FILE NOT FOUND"
             exit 1
           fi
 
-          echo "TLS REFERENCES BEFORE PATCH:"
+          if [ -f "$UREQ" ]; then
+            echo "$UREQ"
+          else
+            echo "WARNING: UREQUESTS FILE NOT FOUND"
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "TLS REFERENCES BEFORE PATCH"
+          echo "========================================"
 
           grep -n \
             -E "import tls|import ssl|from tls|from ssl|SSLContext|PROTOCOL_TLS" \
             "$REQ" "$UREQ" \
             2>/dev/null || true
+
+          echo ""
+          echo "========================================"
+          echo "PATCHING HTTPS BACKEND"
+          echo "========================================"
 
           sed -i -E \
             's/^([[:space:]]*)import[[:space:]]+tls[[:space:]]*$/\1import ssl as tls/' \
             "$REQ"
 
+          echo "REQUESTS PATCHED"
+
           echo ""
-          echo "TLS REFERENCES AFTER PATCH:"
+          echo "========================================"
+          echo "TLS REFERENCES AFTER PATCH"
+          echo "========================================"
 
           grep -n \
             -E "import tls|import ssl|from tls|from ssl|SSLContext|PROTOCOL_TLS" \
             "$REQ" "$UREQ" \
             2>/dev/null || true
 
+          echo ""
+          echo "========================================"
+          echo "VERIFY REQUESTS PATCH"
+          echo "========================================"
+
           if grep -q -E \
             "^[[:space:]]*import[[:space:]]+tls[[:space:]]*$" \
             "$REQ"; then
+
             echo "ERROR: ORIGINAL TLS IMPORT STILL EXISTS"
             exit 1
+
           fi
 
           if grep -q -E \
             "^[[:space:]]*import[[:space:]]+ssl[[:space:]]+as[[:space:]]+tls" \
             "$REQ"; then
-            echo "REQUESTS PATCH SUCCESS"
+
+            echo "PATCH SUCCESS: REQUESTS NOW USES SSL BACKEND"
+
           else
+
             echo "ERROR: SSL PATCH NOT FOUND"
             exit 1
+
           fi
 
       - name: Patch A2DP queue
@@ -246,9 +272,19 @@ jobs:
             "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
             "$A2DP_FILE" || true
 
-          sed -i \
-            's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
-            "$A2DP_FILE"
+          if grep -q \
+            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
+            "$A2DP_FILE"; then
+
+            echo "A2DP QUEUE ALREADY PATCHED TO 16"
+
+          else
+
+            sed -i \
+              's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
+              "$A2DP_FILE"
+
+          fi
 
           echo ""
           echo "AFTER PATCH:"
@@ -257,13 +293,25 @@ jobs:
             "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
             "$A2DP_FILE" || true
 
+          echo ""
+
           if grep -q \
             "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
             "$A2DP_FILE"; then
-            echo "A2DP QUEUE PATCH SUCCESS"
+
+            echo "PATCH SUCCESS: A2DP QUEUE = 16"
+
           else
+
             echo "ERROR: A2DP QUEUE PATCH FAILED"
+            echo "ACTUAL SOURCE LINE:"
+
+            grep -n \
+              "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
+              "$A2DP_FILE" || true
+
             exit 1
+
           fi
 
       - name: Build TARS firmware
@@ -284,54 +332,111 @@ jobs:
             2>&1 | tee \
             "$GITHUB_WORKSPACE/tars_build.log"
 
-      - name: Diagnose build
+      - name: Diagnose HTTPS and mbedTLS build
         if: always()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
           echo "========================================"
-          echo "FIRMWARE"
+          echo "FINAL SDKCONFIG HTTPS / TLS / CRYPTO"
           echo "========================================"
 
-          if [ -f "$BUILD/firmware.bin" ]; then
-            ls -lh "$BUILD/firmware.bin"
+          if [ -f "$BUILD/sdkconfig" ]; then
+
+            echo ""
+            echo "----- ESP TLS -----"
+
+            grep -n \
+              -E "^(CONFIG_ESP_TLS|# CONFIG_ESP_TLS)" \
+              "$BUILD/sdkconfig" || true
+
+            echo ""
+            echo "----- CERTIFICATE BUNDLE -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_CERTIFICATE|# CONFIG_MBEDTLS_CERTIFICATE)" \
+              "$BUILD/sdkconfig" || true
+
+            echo ""
+            echo "----- SSL / TLS -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_SSL|# CONFIG_MBEDTLS_SSL|CONFIG_MBEDTLS_TLS|# CONFIG_MBEDTLS_TLS)" \
+              "$BUILD/sdkconfig" || true
+
+            echo ""
+            echo "----- KEY EXCHANGE -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_KEY_EXCHANGE|# CONFIG_MBEDTLS_KEY_EXCHANGE)" \
+              "$BUILD/sdkconfig" || true
+
+            echo ""
+            echo "----- RSA / ECDSA / ECDH / ECP -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_(RSA|ECDSA|ECDH|ECP)|# CONFIG_MBEDTLS_(RSA|ECDSA|ECDH|ECP))" \
+              "$BUILD/sdkconfig" || true
+
+            echo ""
+            echo "----- X509 / PK / ASN1 -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_(X509|PK_|ASN1)|# CONFIG_MBEDTLS_(X509|PK_|ASN1))" \
+              "$BUILD/sdkconfig" || true
+
+            echo ""
+            echo "----- HASH -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_(SHA|MD5)|# CONFIG_MBEDTLS_(SHA|MD5))" \
+              "$BUILD/sdkconfig" || true
+
+            echo ""
+            echo "----- ENTIRE MBEDTLS CONFIG -----"
+
+            grep -n \
+              -E "^(CONFIG_MBEDTLS_|# CONFIG_MBEDTLS_)" \
+              "$BUILD/sdkconfig" || true
+
           else
-            echo "FIRMWARE NOT FOUND"
+
+            echo "SDKCONFIG NOT FOUND"
+
           fi
 
           echo ""
           echo "========================================"
-          echo "FLASH ARGS"
-          echo "========================================"
-
-          if [ -f "$BUILD/flash_args" ]; then
-            cat "$BUILD/flash_args"
-          else
-            echo "flash_args NOT FOUND"
-          fi
-
-          echo ""
-          echo "========================================"
-          echo "FLASH PROJECT ARGS"
-          echo "========================================"
-
-          if [ -f "$BUILD/flash_project_args" ]; then
-            cat "$BUILD/flash_project_args"
-          else
-            echo "flash_project_args NOT FOUND"
-          fi
-
-          echo ""
-          echo "========================================"
-          echo "TARS MODULES"
+          echo "TARS MODULE CHECK"
           echo "========================================"
 
           if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
+
             grep -n \
               -E "tars_a2dp|tars_bluetooth" \
               "$BUILD/genhdr/moduledefs.collected" \
               || true
+
+          else
+
+            echo "MODULEDEFS NOT FOUND"
+
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "FIRMWARE CHECK"
+          echo "========================================"
+
+          if [ -f "$BUILD/firmware.bin" ]; then
+
+            ls -lh "$BUILD/firmware.bin"
+
+          else
+
+            echo "FIRMWARE NOT FOUND"
+
           fi
 
           echo ""
@@ -343,163 +448,34 @@ jobs:
             "$GITHUB_WORKSPACE/tars_build.log" \
             || true
 
-      - name: Prepare TARS-FULL.bin for ESP32Flash
+      - name: Prepare firmware
         shell: bash
         run: |
-          set -e
-
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
-          OUTPUT="$GITHUB_WORKSPACE/output"
 
-          mkdir -p "$OUTPUT"
-
-          echo "========================================"
-          echo "PREPARE SINGLE TARS-FULL.bin"
-          echo "TARGET FLASH OFFSET: 0x1000"
-          echo "========================================"
-
-          if [ ! -f "$BUILD/flash_args" ]; then
-            echo "ERROR: flash_args NOT FOUND"
+          if [ ! -f "$BUILD/firmware.bin" ]; then
+            echo "ERROR: FIRMWARE.BIN NOT FOUND"
             exit 1
           fi
 
-          BOOTLOADER=$(awk '$1=="0x1000"{print $2; exit}' "$BUILD/flash_args")
-          PARTITION=$(awk '$1=="0x8000"{print $2; exit}' "$BUILD/flash_args")
-          APP=$(awk '$1=="0x10000"{print $2; exit}' "$BUILD/flash_args")
+          mkdir -p "$GITHUB_WORKSPACE/output"
 
-          if [ -z "$BOOTLOADER" ]; then
-            echo "ERROR: BOOTLOADER NOT FOUND"
-            exit 1
-          fi
+          cp \
+            "$BUILD/firmware.bin" \
+            "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP.bin"
 
-          if [ -z "$PARTITION" ]; then
-            echo "ERROR: PARTITION TABLE NOT FOUND"
-            exit 1
-          fi
-
-          if [ -z "$APP" ]; then
-            echo "ERROR: APPLICATION NOT FOUND"
-            exit 1
-          fi
-
-          BOOT="$BUILD/$BOOTLOADER"
-          PART="$BUILD/$PARTITION"
-          APP_BIN="$BUILD/$APP"
-
-          if [ ! -f "$BOOT" ]; then
-            echo "ERROR: $BOOT NOT FOUND"
-            exit 1
-          fi
-
-          if [ ! -f "$PART" ]; then
-            echo "ERROR: $PART NOT FOUND"
-            exit 1
-          fi
-
-          if [ ! -f "$APP_BIN" ]; then
-            echo "ERROR: $APP_BIN NOT FOUND"
-            exit 1
-          fi
-
-          echo ""
-          echo "BOOTLOADER:"
-          ls -lh "$BOOT"
-
-          echo ""
-          echo "PARTITION:"
-          ls -lh "$PART"
-
-          echo ""
-          echo "APPLICATION:"
-          ls -lh "$APP_BIN"
-
-          echo ""
           echo "========================================"
-          echo "MERGING RELATIVE TO 0x1000"
+          echo "OUTPUT FIRMWARE"
           echo "========================================"
 
-          python3 -m esptool \
-            --chip esp32 \
-            merge-bin \
-            -o "$OUTPUT/TARS-FULL.bin" \
-            --flash-mode dio \
-            --flash-freq 40m \
-            --flash-size 4MB \
-            0x0000 "$BOOT" \
-            0x7000 "$PART" \
-            0xF000 "$APP_BIN"
+          ls -lh \
+            "$GITHUB_WORKSPACE/output"
 
-          echo ""
-          echo "========================================"
-          echo "TARS-FULL.bin CREATED"
-          echo "========================================"
-
-          ls -lh "$OUTPUT/TARS-FULL.bin"
-
-          echo ""
-          echo "========================================"
-          echo "IMAGE INFO"
-          echo "========================================"
-
-          python3 -m esptool \
-            --chip esp32 \
-            image-info \
-            "$OUTPUT/TARS-FULL.bin" \
-            || true
-
-          echo ""
-          echo "========================================"
-          echo "VERIFY BOOTLOADER FILE OFFSET 0x0000"
-          echo "========================================"
-
-          dd \
-            if="$OUTPUT/TARS-FULL.bin" \
-            bs=1 \
-            skip=$((0x0000)) \
-            count=16 \
-            2>/dev/null \
-            | od -An -tx1
-
-          echo ""
-          echo "========================================"
-          echo "VERIFY PARTITION FILE OFFSET 0x7000"
-          echo "========================================"
-
-          dd \
-            if="$OUTPUT/TARS-FULL.bin" \
-            bs=1 \
-            skip=$((0x7000)) \
-            count=16 \
-            2>/dev/null \
-            | od -An -tx1
-
-          echo ""
-          echo "========================================"
-          echo "VERIFY APPLICATION FILE OFFSET 0xF000"
-          echo "========================================"
-
-          dd \
-            if="$OUTPUT/TARS-FULL.bin" \
-            bs=1 \
-            skip=$((0xF000)) \
-            count=16 \
-            2>/dev/null \
-            | od -An -tx1
-
-          echo ""
-          echo "========================================"
-          echo "FLASH INSTRUCTIONS"
-          echo "========================================"
-
-          echo "FILE   : TARS-FULL.bin"
-          echo "OFFSET : 0x1000"
-          echo "========================================"
-
-      - name: Upload TARS-FULL.bin
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: TARS-FULL-Firmware
-          path: output/TARS-FULL.bin
+          name: TARS-MicroPython-ESP32-A2DP
+          path: output/TARS-MicroPython-ESP32-A2DP.bin
           if-no-files-found: error
 
       - name: Upload build log
