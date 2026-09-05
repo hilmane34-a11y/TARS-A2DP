@@ -1,23 +1,48 @@
+# TARS ESP32 A2DP - balanced Bluetooth sdkconfig optimized for DOIT (no PSRAM)
+# Goal: reduce heap pressure while keeping reliable A2DP audio
+
 CONFIG_BT_ENABLED=y
 CONFIG_BT_BLUEDROID_ENABLED=y
 CONFIG_BT_CLASSIC_ENABLED=y
 CONFIG_BT_A2DP_ENABLE=y
 
-# Bluetooth Classic / A2DP
+# A2DP: use dynamic memory & include SBC encoder
+CONFIG_A2D_DYNAMIC_MEMORY=y
+CONFIG_A2D_SBC_ENCODER_INCLUDED=y
+
+# SBC buffer pool: enough slots to avoid occasional malloc(4112) failures
+# Conservative but safe value for non-PSRAM boards
+CONFIG_A2DP_SBC_BUFFER_POOL_SIZE=10
+
+# SBC encoder task stack size: moderate to avoid stack OOM while saving RAM
+# If you see crashes, raise this to 3000
+CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE=2500
+
+# Bluetooth Classic / A2DP mode (BR/EDR only)
 CONFIG_BTDM_CTRL_MODE_BLE_ONLY=n
 CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
 CONFIG_BTDM_CTRL_MODE_BTDM=n
 CONFIG_BT_BLE_ENABLED=n
 
-# Bluetooth memory
+# Prefer internal heap allocation (no SPIRAM on DOIT)
 CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=n
 
-# WiFi - hemat IRAM
+# Reduce number of links/channels/buffers (for single-speaker use)
+# Keep values conservative so throughput/latency remain acceptable
+CONFIG_BT_CLASSIC_QNUM_LINKS=1
+CONFIG_BT_L2CAP_CHANNELS_NUM=6
+CONFIG_BT_L2CAP_TX_BUFFER_SIZE=3
+CONFIG_BT_L2CAP_DEFALT_MTU=672
+
+# Release DRAM reserved for BLE (we don't use BLE)
+CONFIG_BT_RESERVE_DRAM=0
+
+# WiFi - keep defaults for IRAM options (no extra IRAM usage)
 CONFIG_ESP_WIFI_IRAM_OPT=n
 CONFIG_ESP_WIFI_RX_IRAM_OPT=n
 CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n
 
-# HTTPS / TLS
+# HTTPS / TLS (keep certificate bundle enabled)
 CONFIG_MBEDTLS_SSL_ALPN=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
@@ -31,5 +56,5 @@ CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/TARS_ESP32_A2DP/partitions.csv"
 
-# No PSRAM
+# No PSRAM on DOIT
 CONFIG_SPIRAM=n
