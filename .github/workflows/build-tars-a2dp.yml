@@ -1,4 +1,4 @@
-name: Build TARS V1 Man MicroPython ESP32 A2DP
+name: Build TARS MicroPython ESP32 A2DP MP3
 
 on:
   workflow_dispatch:
@@ -18,16 +18,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             git make gcc g++ cmake ninja-build \
-            python3 python3-pip flex bison gperf ccache \
-            libffi-dev libssl-dev dfu-util libusb-1.0-0
+            python3 python3-pip \
+            flex bison gperf ccache \
+            libffi-dev libssl-dev \
+            dfu-util libusb-1.0-0
 
       - name: Clone MicroPython
         run: |
           git clone --depth 1 \
             https://github.com/micropython/micropython.git \
             micropython
+
           cd micropython
-          git submodule update --init --recursive --depth 1
+
+          git submodule update \
+            --init \
+            --recursive \
+            --depth 1
 
       - name: Clone ESP-IDF
         run: |
@@ -36,7 +43,9 @@ jobs:
             --branch v5.5.2 \
             https://github.com/espressif/esp-idf.git \
             esp-idf
+
           cd esp-idf
+
           git submodule update \
             --init \
             --recursive \
@@ -53,183 +62,251 @@ jobs:
           make -C mpy-cross
 
       - name: Setup ESP32 submodules
+        shell: bash
         run: |
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
+
           cd "$GITHUB_WORKSPACE/micropython"
+
           make -C ports/esp32 submodules
+
+      - name: Install ESP Audio Codec MP3
+        shell: bash
+        run: |
+          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
+
+          cd "$GITHUB_WORKSPACE"
+
+          echo "========================================"
+          echo "INSTALL ESP AUDIO CODEC"
+          echo "========================================"
+
+          idf.py add-dependency \
+            "espressif/esp_audio_codec^2.6.2"
+
+          echo ""
+          echo "========================================"
+          echo "ESP AUDIO CODEC INSTALLED"
+          echo "========================================"
+
+          find "$GITHUB_WORKSPACE" \
+            -maxdepth 4 \
+            -type d \
+            -name "esp_audio_codec" \
+            -print
+
+      - name: Verify MP3 decoder
+        shell: bash
+        run: |
+          echo "========================================"
+          echo "VERIFY MP3 DECODER"
+          echo "========================================"
+
+          CODEC_DIR=""
+
+          CODEC_DIR=$(find \
+            "$GITHUB_WORKSPACE" \
+            -type d \
+            -name "esp_audio_codec" \
+            | head -n 1)
+
+          if [ -z "$CODEC_DIR" ]; then
+            echo "ERROR: esp_audio_codec NOT FOUND"
+            exit 1
+          fi
+
+          echo "CODEC:"
+          echo "$CODEC_DIR"
+
+          echo ""
+          echo "MP3 FILES:"
+
+          find "$CODEC_DIR" \
+            -type f \
+            \( \
+              -iname "*mp3*" \
+              -o \
+              -iname "*simple_dec*" \
+              -o \
+              -iname "*audio_dec*" \
+            \) \
+            | head -n 100
+
+          echo ""
+          echo "HEADER CHECK:"
+
+          find "$CODEC_DIR" \
+            -type f \
+            \( \
+              -name "esp_audio_simple_dec.h" \
+              -o \
+              -name "esp_audio_simple_dec_default.h" \
+              -o \
+              -name "esp_audio_dec_default.h" \
+            \) \
+            -print
 
       - name: Apply esp32_rmt.c fix
         shell: bash
         run: |
           RMT_FILE="$GITHUB_WORKSPACE/micropython/ports/esp32/esp32_rmt.c"
 
-          if grep -q \
-            "mp_uint_t resolution_hz = 1000000;" \
-            "$RMT_FILE"; then
+          echo "========================================"
+          echo "PATCH ESP32 RMT"
+          echo "========================================"
 
-            echo "RMT FIX ALREADY APPLIED"
+          if [ ! -f "$RMT_FILE" ]; then
+            echo "ERROR: esp32_rmt.c NOT FOUND"
+            exit 1
+          fi
 
-          elif grep -q \
-            "mp_uint_t resolution_hz;" \
-            "$RMT_FILE"; then
+          echo "BEFORE PATCH:"
+          grep -n "resolution_hz" "$RMT_FILE" || true
 
+          if grep -q "mp_uint_t resolution_hz = 1000000;" "$RMT_FILE"; then
+            echo "RMT ALREADY PATCHED"
+
+          elif grep -q "mp_uint_t resolution_hz;" "$RMT_FILE"; then
             sed -i \
               's/mp_uint_t resolution_hz;/mp_uint_t resolution_hz = 1000000;/' \
               "$RMT_FILE"
 
-            echo "RMT FIX APPLIED"
-
           else
-
-            echo "ERROR: resolution_hz NOT FOUND"
+            echo "ERROR: EXPECTED resolution_hz DECLARATION NOT FOUND"
+            grep -n "resolution_hz" "$RMT_FILE" || true
             exit 1
+          fi
 
+          echo ""
+          echo "AFTER PATCH:"
+          grep -n "resolution_hz" "$RMT_FILE" || true
+
+          echo ""
+
+          if grep -q "mp_uint_t resolution_hz = 1000000;" "$RMT_FILE"; then
+            echo "PATCH SUCCESS: resolution_hz INITIALIZED"
+          else
+            echo "ERROR: RMT PATCH FAILED"
+            exit 1
           fi
 
       - name: Install TARS board
         shell: bash
         run: |
-          SRC="$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP"
-          DST="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP"
+          BOARD_DIR="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP"
 
-          mkdir -p "$DST"
+          mkdir -p "$BOARD_DIR"
 
-          cp "$SRC/mpconfigboard.h" \
-             "$DST/mpconfigboard.h"
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.h" \
+            "$BOARD_DIR/"
 
-          cp "$SRC/mpconfigboard.cmake" \
-             "$DST/mpconfigboard.cmake"
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/mpconfigboard.cmake" \
+            "$BOARD_DIR/"
 
-          cp "$SRC/sdkconfig.bluetooth" \
-             "$DST/sdkconfig.bluetooth"
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth" \
+            "$BOARD_DIR/"
 
-          cp "$SRC/partitions.csv" \
-             "$DST/partitions.csv"
-
-          ls -la "$DST"
-
-      - name: Install ESP Audio Codec
-        shell: bash
-        run: |
-          set -e
-
-          . "$GITHUB_WORKSPACE/esp-idf/export.sh"
-
-          FETCH="$GITHUB_WORKSPACE/audio-codec-fetch"
-          DEST="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
-
-          rm -rf "$FETCH"
-          rm -rf "$DEST"
-
-          mkdir -p "$FETCH/main"
-
-          cat > "$FETCH/CMakeLists.txt" <<'EOF'
-          cmake_minimum_required(VERSION 3.16)
-          include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-          project(audio_codec_fetch)
-          EOF
-
-          cat > "$FETCH/main/CMakeLists.txt" <<'EOF'
-          idf_component_register(
-              SRCS "dummy.c"
-          )
-          EOF
-
-          cat > "$FETCH/main/dummy.c" <<'EOF'
-          void audio_codec_dummy(void)
-          {
-          }
-          EOF
-
-          cd "$FETCH"
-
-          idf.py add-dependency \
-            "espressif/esp_audio_codec^2.6.2"
-
-          idf.py reconfigure
-
-          CODEC="$FETCH/managed_components/espressif__esp_audio_codec"
-
-          if [ ! -d "$CODEC" ]; then
-            echo "ERROR: ESP AUDIO CODEC NOT RESOLVED"
-            find "$FETCH" -maxdepth 5 -type d
-            exit 1
-          fi
-
-          HEADER="$CODEC/include/simple_dec/esp_audio_simple_dec.h"
-
-          if [ ! -f "$HEADER" ]; then
-            echo "ERROR: MP3 DECODER HEADER NOT FOUND"
-            echo "Searching headers..."
-            find "$CODEC" -type f \
-              \( -name "esp_audio_simple_dec.h" -o -name "esp_audio_dec.h" \) \
-              -print
-            exit 1
-          fi
-
-          mkdir -p "$DEST"
-
-          cp -a "$CODEC"/. "$DEST"/
-
-          if [ ! -f \
-            "$DEST/include/simple_dec/esp_audio_simple_dec.h" ]; then
-            echo "ERROR: CODEC COPY FAILED"
-            exit 1
-          fi
+          cp \
+            "$GITHUB_WORKSPACE/boards/TARS_ESP32_A2DP/partitions.csv" \
+            "$BOARD_DIR/"
 
           echo "========================================"
-          echo "ESP AUDIO CODEC 2.6.2 OK"
+          echo "TARS BOARD INSTALLED"
           echo "========================================"
-          echo "Component:"
-          echo "$DEST"
-          echo "MP3 header:"
-          echo "$DEST/include/simple_dec/esp_audio_simple_dec.h"
 
-      - name: Verify MP3 CMake
-        shell: bash
-        run: |
-          CMAKE_FILE="$GITHUB_WORKSPACE/modules/tars_a2dp/micropython.cmake"
+          ls -la "$BOARD_DIR"
 
-          if ! grep -q \
-            "__idf_esp_audio_codec" \
-            "$CMAKE_FILE"; then
-
-            echo "ERROR: ESP AUDIO CODEC LINK MISSING"
-            exit 1
-
-          fi
-
-          echo "MP3 CMAKE LINK OK"
-
-      - name: Enable HTTPS certificate bundle
+      - name: Enable HTTPS Certificate Bundle
         shell: bash
         run: |
           BOARD="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth"
 
-          sed -i '/^CONFIG_MBEDTLS_SSL_ALPN=/d' "$BOARD"
-          sed -i '/^CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=/d' "$BOARD"
-          sed -i '/^CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=/d' "$BOARD"
-          sed -i '/^CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=/d' "$BOARD"
-          sed -i '/^CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=/d' "$BOARD"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=/d' "$BOARD"
+          sed -i '/CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=/d' "$BOARD"
+          sed -i '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
 
-          cat >> "$BOARD" <<'EOF'
-
+          cat >> "$BOARD" << 'EOF'
+          # HTTPS / TLS
           CONFIG_MBEDTLS_SSL_ALPN=y
+
+          # Certificate Bundle
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=n
+
+          # HTTPS client
           CONFIG_ESP_TLS_USE_SECURE_ELEMENT=n
           EOF
 
-      - name: Patch requests HTTPS
+          echo "========================================"
+          echo "TARS HTTPS CONFIG"
+          echo "========================================"
+
+          tail -n 25 "$BOARD"
+
+      - name: Patch requests HTTPS backend to ssl
         shell: bash
         run: |
           REQ="$GITHUB_WORKSPACE/micropython/lib/micropython-lib/python-ecosys/requests/requests/__init__.py"
+          UREQ="$GITHUB_WORKSPACE/micropython/lib/micropython-lib/micropython/urequests/urequests.py"
+
+          echo "========================================"
+          echo "SEARCHING REQUESTS SOURCES"
+          echo "========================================"
 
           if [ -f "$REQ" ]; then
-            sed -i -E \
-              's/^([[:space:]]*)import[[:space:]]+tls[[:space:]]*$/\1import ssl as tls/' \
-              "$REQ"
+            echo "$REQ"
+          else
+            echo "ERROR: REQUESTS FILE NOT FOUND"
+            exit 1
+          fi
+
+          if [ -f "$UREQ" ]; then
+            echo "$UREQ"
+          else
+            echo "WARNING: UREQUESTS FILE NOT FOUND"
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "PATCHING HTTPS BACKEND"
+          echo "========================================"
+
+          sed -i -E \
+            's/^([[:space:]]*)import[[:space:]]+tls[[:space:]]*$/\1import ssl as tls/' \
+            "$REQ"
+
+          echo "REQUESTS PATCHED"
+
+          echo ""
+          echo "========================================"
+          echo "VERIFY REQUESTS PATCH"
+          echo "========================================"
+
+          if grep -q -E \
+            "^[[:space:]]*import[[:space:]]+tls[[:space:]]*$" \
+            "$REQ"; then
+
+            echo "ERROR: ORIGINAL TLS IMPORT STILL EXISTS"
+            exit 1
+
+          fi
+
+          if grep -q -E \
+            "^[[:space:]]*import[[:space:]]+ssl[[:space:]]+as[[:space:]]+tls" \
+            "$REQ"; then
+
+            echo "PATCH SUCCESS: REQUESTS NOW USES SSL BACKEND"
+
+          else
+
+            echo "ERROR: SSL PATCH NOT FOUND"
+            exit 1
+
           fi
 
       - name: Patch A2DP queue
@@ -237,18 +314,102 @@ jobs:
         run: |
           A2DP_FILE="$GITHUB_WORKSPACE/esp-idf/components/bt/host/bluedroid/btc/profile/std/a2dp/btc_a2dp_source.c"
 
+          echo "========================================"
+          echo "PATCH A2DP QUEUE"
+          echo "========================================"
+
           if [ ! -f "$A2DP_FILE" ]; then
             echo "ERROR: A2DP FILE NOT FOUND"
             exit 1
           fi
 
-          sed -i \
-            's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
-            "$A2DP_FILE"
+          echo "BEFORE PATCH:"
 
-          grep \
+          grep -n \
             "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
-            "$A2DP_FILE"
+            "$A2DP_FILE" || true
+
+          if grep -q \
+            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
+            "$A2DP_FILE"; then
+
+            echo "A2DP QUEUE ALREADY PATCHED TO 16"
+
+          else
+
+            sed -i \
+              's/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)/#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)/' \
+              "$A2DP_FILE"
+
+          fi
+
+          echo ""
+          echo "AFTER PATCH:"
+
+          grep -n \
+            "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
+            "$A2DP_FILE" || true
+
+          echo ""
+
+          if grep -q \
+            "#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (16)" \
+            "$A2DP_FILE"; then
+
+            echo "PATCH SUCCESS: A2DP QUEUE = 16"
+
+          else
+
+            echo "ERROR: A2DP QUEUE PATCH FAILED"
+            exit 1
+
+          fi
+
+      - name: Verify TARS MP3 module configuration
+        shell: bash
+        run: |
+          echo "========================================"
+          echo "VERIFY TARS A2DP MODULE"
+          echo "========================================"
+
+          CMAKE_FILE="$GITHUB_WORKSPACE/modules/tars_a2dp/micropython.cmake"
+          SOURCE_FILE="$GITHUB_WORKSPACE/modules/tars_a2dp/tars_a2dp.c"
+
+          if [ ! -f "$CMAKE_FILE" ]; then
+            echo "ERROR: micropython.cmake NOT FOUND"
+            exit 1
+          fi
+
+          if [ ! -f "$SOURCE_FILE" ]; then
+            echo "ERROR: tars_a2dp.c NOT FOUND"
+            exit 1
+          fi
+
+          echo ""
+          echo "----- MICROPYTHON.CMAKE -----"
+          cat "$CMAKE_FILE"
+
+          echo ""
+          echo "----- MP3 REFERENCES -----"
+
+          grep -n \
+            -E "esp_audio|SIMPLE_DEC|MP3" \
+            "$SOURCE_FILE" \
+            | head -n 100 \
+            || true
+
+          echo ""
+          echo "----- ESP AUDIO LINK -----"
+
+          if grep -q "__idf_esp_audio_codec" "$CMAKE_FILE"; then
+            echo "ESP AUDIO CODEC LINK FOUND"
+          else
+            echo "ERROR: ESP AUDIO CODEC LINK NOT FOUND"
+            exit 1
+          fi
+
+          echo ""
+          echo "MP3 MODULE CHECK SUCCESS"
 
       - name: Build TARS firmware
         shell: bash
@@ -268,81 +429,77 @@ jobs:
             2>&1 | tee \
             "$GITHUB_WORKSPACE/tars_build.log"
 
-      - name: Diagnose
+      - name: Diagnose MP3 A2DP build
         if: always()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
-          CODEC="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
 
           echo "========================================"
-          echo "ESP AUDIO CODEC"
+          echo "TARS MP3 / A2DP DIAGNOSTIC"
           echo "========================================"
-
-          if [ -d "$CODEC" ]; then
-            echo "ESP AUDIO CODEC: OK"
-          else
-            echo "ESP AUDIO CODEC: MISSING"
-          fi
 
           echo ""
-          echo "========================================"
-          echo "WIFI IRAM"
-          echo "========================================"
+          echo "----- SDKCONFIG AUDIO / BT -----"
 
           if [ -f "$BUILD/sdkconfig" ]; then
             grep -n \
-              -E "CONFIG_ESP_WIFI_(IRAM_OPT|RX_IRAM_OPT|EXTRA_IRAM_OPT)" \
-              "$BUILD/sdkconfig" || true
-          else
-            echo "SDKCONFIG NOT FOUND"
+              -E "^(CONFIG_BT|CONFIG_AUDIO|CONFIG_ESP_AUDIO|CONFIG_A2DP|CONFIG_MBEDTLS)" \
+              "$BUILD/sdkconfig" \
+              | head -n 300 \
+              || true
           fi
 
           echo ""
-          echo "========================================"
-          echo "MP3 HEADER"
-          echo "========================================"
+          echo "----- MODULES -----"
 
-          if [ -f \
-            "$CODEC/include/simple_dec/esp_audio_simple_dec.h" ]; then
-            echo "MP3 HEADER: OK"
+          if [ -f "$BUILD/genhdr/moduledefs.collected" ]; then
+            grep -n \
+              -E "tars_a2dp|tars_bluetooth" \
+              "$BUILD/genhdr/moduledefs.collected" \
+              || true
           else
-            echo "MP3 HEADER: MISSING"
+            echo "MODULEDEFS NOT FOUND"
           fi
 
           echo ""
-          echo "========================================"
-          echo "FIRMWARE"
-          echo "========================================"
+          echo "----- ESP AUDIO CODEC -----"
+
+          find "$BUILD" \
+            -type f \
+            \( \
+              -iname "*esp_audio_codec*" \
+              -o \
+              -iname "*audio_simple_dec*" \
+              -o \
+              -iname "*mp3*" \
+            \) \
+            | head -n 100 \
+            || true
+
+          echo ""
+          echo "----- FIRMWARE -----"
 
           if [ -f "$BUILD/firmware.bin" ]; then
             ls -lh "$BUILD/firmware.bin"
-            xxd -l 16 "$BUILD/firmware.bin"
           else
             echo "FIRMWARE NOT FOUND"
           fi
 
           echo ""
-          echo "========================================"
-          echo "BUILD LOG"
-          echo "========================================"
+          echo "----- LAST BUILD LOG -----"
 
-          if [ -f "$GITHUB_WORKSPACE/tars_build.log" ]; then
-            tail -n 250 \
-              "$GITHUB_WORKSPACE/tars_build.log"
-          else
-            echo "BUILD LOG NOT FOUND"
-          fi
+          tail -n 150 \
+            "$GITHUB_WORKSPACE/tars_build.log" \
+            || true
 
       - name: Prepare firmware
         shell: bash
         run: |
-          set -e
-
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
           if [ ! -f "$BUILD/firmware.bin" ]; then
-            echo "ERROR: firmware.bin NOT FOUND"
+            echo "ERROR: FIRMWARE.BIN NOT FOUND"
             exit 1
           fi
 
@@ -350,16 +507,20 @@ jobs:
 
           cp \
             "$BUILD/firmware.bin" \
-            "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP.bin"
+            "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP-MP3.bin"
+
+          echo "========================================"
+          echo "OUTPUT FIRMWARE"
+          echo "========================================"
 
           ls -lh \
-            "$GITHUB_WORKSPACE/output/TARS-MicroPython-ESP32-A2DP.bin"
+            "$GITHUB_WORKSPACE/output"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: TARS-MicroPython-ESP32-A2DP
-          path: output/TARS-MicroPython-ESP32-A2DP.bin
+          name: TARS-MicroPython-ESP32-A2DP-MP3
+          path: output/TARS-MicroPython-ESP32-A2DP-MP3.bin
           if-no-files-found: error
 
       - name: Upload build log
