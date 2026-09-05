@@ -2666,6 +2666,213 @@ static MP_DEFINE_CONST_FUN_OBJ_1(
 );
 
 
+
+/* =========================================================
+   LOCAL RAW PCM LOAD
+   FORMAT: S16LE / 24000 Hz / MONO
+   ========================================================= */
+
+static mp_obj_t
+tars_a2dp_tts_pcm_begin(void)
+{
+    if (tars_bt_started) {
+        return mp_obj_new_str(
+            "ERROR: STOP BLUETOOTH BEFORE PCM LOAD",
+            strlen("ERROR: STOP BLUETOOTH BEFORE PCM LOAD")
+        );
+    }
+
+    if (tars_bt_stopping) {
+        return mp_obj_new_str(
+            "ERROR: BLUETOOTH STILL STOPPING",
+            strlen("ERROR: BLUETOOTH STILL STOPPING")
+        );
+    }
+
+    if (tars_tts_loading) {
+        return mp_obj_new_str(
+            "ERROR: TTS PCM LOAD ALREADY ACTIVE",
+            strlen("ERROR: TTS PCM LOAD ALREADY ACTIVE")
+        );
+    }
+
+    if (!tars_find_tts_partition()) {
+        return mp_obj_new_str(
+            "ERROR: TTS FLASH PARTITION NOT FOUND",
+            strlen("ERROR: TTS FLASH PARTITION NOT FOUND")
+        );
+    }
+
+    tars_clear_tts_state();
+    tars_reset_tts_debug();
+    tars_tts_error = "";
+    tars_tts_loading = true;
+    tars_status_text = "LOCAL PCM PREPARING";
+
+    if (!tars_erase_tts_flash()) {
+        tars_tts_loading = false;
+        tars_status_text = "LOCAL PCM ERASE FAILED";
+
+        return mp_obj_new_str(
+            "ERROR: TTS FLASH ERASE FAILED",
+            strlen("ERROR: TTS FLASH ERASE FAILED")
+        );
+    }
+
+    return mp_obj_new_str(
+        "LOCAL PCM READY",
+        strlen("LOCAL PCM READY")
+    );
+}
+
+static MP_DEFINE_CONST_FUN_OBJ_0(
+    tars_a2dp_tts_pcm_begin_obj,
+    tars_a2dp_tts_pcm_begin
+);
+
+
+static mp_obj_t
+tars_a2dp_tts_pcm_write(mp_obj_t data_obj)
+{
+    if (!tars_tts_loading) {
+        return mp_obj_new_str(
+            "ERROR: PCM LOAD NOT STARTED",
+            strlen("ERROR: PCM LOAD NOT STARTED")
+        );
+    }
+
+    if (tars_bt_started) {
+        return mp_obj_new_str(
+            "ERROR: BLUETOOTH ACTIVE DURING PCM LOAD",
+            strlen("ERROR: BLUETOOTH ACTIVE DURING PCM LOAD")
+        );
+    }
+
+    mp_buffer_info_t bufinfo;
+
+    mp_get_buffer_raise(
+        data_obj,
+        &bufinfo,
+        MP_BUFFER_READ
+    );
+
+    if (bufinfo.len == 0) {
+        return mp_obj_new_str(
+            "ERROR: PCM CHUNK EMPTY",
+            strlen("ERROR: PCM CHUNK EMPTY")
+        );
+    }
+
+    if ((bufinfo.len & 3) != 0) {
+        return mp_obj_new_str(
+            "ERROR: PCM CHUNK MUST BE MULTIPLE OF 4 BYTES",
+            strlen("ERROR: PCM CHUNK MUST BE MULTIPLE OF 4 BYTES")
+        );
+    }
+
+    if (!tars_find_tts_partition()) {
+        tars_tts_loading = false;
+
+        return mp_obj_new_str(
+            "ERROR: TTS FLASH PARTITION NOT FOUND",
+            strlen("ERROR: TTS FLASH PARTITION NOT FOUND")
+        );
+    }
+
+    if (tars_tts_flash_size + bufinfo.len >
+        tars_tts_partition->size) {
+
+        tars_tts_loading = false;
+        tars_status_text = "LOCAL PCM FLASH FULL";
+
+        return mp_obj_new_str(
+            "ERROR: TTS FLASH FULL",
+            strlen("ERROR: TTS FLASH FULL")
+        );
+    }
+
+    esp_err_t ret = esp_partition_write(
+        tars_tts_partition,
+        tars_tts_flash_size,
+        bufinfo.buf,
+        bufinfo.len
+    );
+
+    if (ret != ESP_OK) {
+        tars_tts_loading = false;
+        tars_status_text = "LOCAL PCM WRITE FAILED";
+
+        return mp_obj_new_str(
+            "ERROR: TTS PCM FLASH WRITE FAILED",
+            strlen("ERROR: TTS PCM FLASH WRITE FAILED")
+        );
+    }
+
+    tars_tts_flash_size += bufinfo.len;
+    tars_status_text = "LOCAL PCM WRITING";
+
+    return mp_obj_new_int_from_uint(
+        (unsigned int)tars_tts_flash_size
+    );
+}
+
+static MP_DEFINE_CONST_FUN_OBJ_1(
+    tars_a2dp_tts_pcm_write_obj,
+    tars_a2dp_tts_pcm_write
+);
+
+
+static mp_obj_t
+tars_a2dp_tts_pcm_finish(void)
+{
+    if (!tars_tts_loading) {
+        return mp_obj_new_str(
+            "ERROR: PCM LOAD NOT STARTED",
+            strlen("ERROR: PCM LOAD NOT STARTED")
+        );
+    }
+
+    if (tars_tts_flash_size < 2) {
+        tars_tts_loading = false;
+        tars_clear_tts_state();
+        tars_status_text = "LOCAL PCM EMPTY";
+
+        return mp_obj_new_str(
+            "ERROR: PCM AUDIO EMPTY",
+            strlen("ERROR: PCM AUDIO EMPTY")
+        );
+    }
+
+    if (tars_tts_flash_size & 1) {
+        tars_tts_loading = false;
+        tars_clear_tts_state();
+        tars_status_text = "LOCAL PCM INVALID";
+
+        return mp_obj_new_str(
+            "ERROR: PCM SIZE MUST BE EVEN",
+            strlen("ERROR: PCM SIZE MUST BE EVEN")
+        );
+    }
+
+    tars_tts_loading = false;
+    tars_tts_read_pos = 0;
+    tars_tts_resample_phase = 0;
+    tars_flash_buffer_start = 0;
+    tars_flash_buffer_length = 0;
+    tars_tts_ready = true;
+    tars_tts_playing = false;
+    tars_status_text = "LOCAL PCM SAVED TO FLASH";
+
+    return mp_obj_new_int_from_uint(
+        (unsigned int)tars_tts_flash_size
+    );
+}
+
+static MP_DEFINE_CONST_FUN_OBJ_0(
+    tars_a2dp_tts_pcm_finish_obj,
+    tars_a2dp_tts_pcm_finish
+);
+
 /* =========================================================
    TTS PLAY
    ========================================================= */
@@ -3410,7 +3617,35 @@ tars_a2dp_globals_table[] =
         )
     },
 
+
     {
+        MP_ROM_QSTR(
+            MP_QSTR_tts_pcm_begin
+        ),
+        MP_ROM_PTR(
+            &tars_a2dp_tts_pcm_begin_obj
+        )
+    },
+
+    {
+        MP_ROM_QSTR(
+            MP_QSTR_tts_pcm_write
+        ),
+        MP_ROM_PTR(
+            &tars_a2dp_tts_pcm_write_obj
+        )
+    },
+
+    {
+        MP_ROM_QSTR(
+            MP_QSTR_tts_pcm_finish
+        ),
+        MP_ROM_PTR(
+            &tars_a2dp_tts_pcm_finish_obj
+        )
+    },
+
+{
         MP_ROM_QSTR(
             MP_QSTR_tts_play
         ),
