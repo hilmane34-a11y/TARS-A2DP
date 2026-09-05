@@ -3790,10 +3790,7 @@ tars_a2dp_user_cmodule = {
 };
 
 /* =========================================================
-   REGISTER
+   REGISTER WAJIB SATU BARIS
    ========================================================= */
 
-MP_REGISTER_MODULE(
-    MP_QSTR_tars_a2dp,
-    tars_a2dp_user_cmodule
-);
+MP_REGISTER_MODULE(MP_QSTR_tars_a2dp, tars_a2dp_user_cmodule);
