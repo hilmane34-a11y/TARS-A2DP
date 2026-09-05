@@ -23,6 +23,11 @@ jobs:
             libffi-dev libssl-dev \
             dfu-util libusb-1.0-0
 
+          python3 -m pip install \
+            --disable-pip-version-check \
+            --break-system-packages \
+            esptool
+
       - name: Clone MicroPython
         run: |
           git clone --depth 1 \
@@ -67,6 +72,7 @@ jobs:
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
+
           make -C ports/esp32 submodules
 
       - name: Apply esp32_rmt.c fix
@@ -90,6 +96,7 @@ jobs:
             echo "RMT ALREADY PATCHED"
 
           elif grep -q "mp_uint_t resolution_hz;" "$RMT_FILE"; then
+
             sed -i \
               's/mp_uint_t resolution_hz;/mp_uint_t resolution_hz = 1000000;/' \
               "$RMT_FILE"
@@ -153,6 +160,7 @@ jobs:
           sed -i '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
 
           cat >> "$BOARD" << 'EOF'
+
           # HTTPS / TLS untuk TARS Cloud TTS
           CONFIG_MBEDTLS_SSL_ALPN=y
 
@@ -236,7 +244,6 @@ jobs:
 
             echo "ERROR: ORIGINAL TLS IMPORT STILL EXISTS"
             exit 1
-
           fi
 
           if grep -q -E \
@@ -246,10 +253,8 @@ jobs:
             echo "PATCH SUCCESS: REQUESTS NOW USES SSL BACKEND"
 
           else
-
             echo "ERROR: SSL PATCH NOT FOUND"
             exit 1
-
           fi
 
       - name: Patch A2DP queue
@@ -302,8 +307,8 @@ jobs:
             echo "PATCH SUCCESS: A2DP QUEUE = 16"
 
           else
-
             echo "ERROR: A2DP QUEUE PATCH FAILED"
+
             echo "ACTUAL SOURCE LINE:"
 
             grep -n \
@@ -311,7 +316,6 @@ jobs:
               "$A2DP_FILE" || true
 
             exit 1
-
           fi
 
       - name: Build TARS firmware
@@ -441,6 +445,32 @@ jobs:
 
           echo ""
           echo "========================================"
+          echo "FLASH ARGUMENT FILES"
+          echo "========================================"
+
+          if [ -f "$BUILD/flash_args" ]; then
+            echo "flash_args FOUND"
+            echo ""
+            cat "$BUILD/flash_args"
+          else
+            echo "flash_args NOT FOUND"
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "FLASH PROJECT ARGUMENTS"
+          echo "========================================"
+
+          if [ -f "$BUILD/flash_project_args" ]; then
+            echo "flash_project_args FOUND"
+            echo ""
+            cat "$BUILD/flash_project_args"
+          else
+            echo "flash_project_args NOT FOUND"
+          fi
+
+          echo ""
+          echo "========================================"
           echo "LAST BUILD LOG"
           echo "========================================"
 
@@ -448,7 +478,7 @@ jobs:
             "$GITHUB_WORKSPACE/tars_build.log" \
             || true
 
-      - name: Prepare firmware
+      - name: Prepare full firmware
         shell: bash
         run: |
           set -e
@@ -457,57 +487,153 @@ jobs:
           OUTPUT="$GITHUB_WORKSPACE/output"
 
           echo "========================================"
-          echo "LOCATING ESP32 FLASH FILES"
+          echo "PREPARE TARS FULL FIRMWARE"
           echo "========================================"
 
           if [ ! -f "$BUILD/firmware.bin" ]; then
-            echo "ERROR: FIRMWARE.BIN NOT FOUND"
+            echo "ERROR: firmware.bin NOT FOUND"
             exit 1
           fi
 
-          BOOTLOADER="$(find "$BUILD" -type f -name 'bootloader.bin' | head -n 1)"
-          PARTITION="$(find "$BUILD" -type f -name 'partition-table.bin' | head -n 1)"
-
-          echo "BOOTLOADER: $BOOTLOADER"
-          echo "PARTITION : $PARTITION"
-          echo "FIRMWARE  : $BUILD/firmware.bin"
-
-          if [ -z "$BOOTLOADER" ] || [ ! -f "$BOOTLOADER" ]; then
-            echo "ERROR: BOOTLOADER.BIN NOT FOUND"
-            find "$BUILD" -type f -name "*.bin" -print
-            exit 1
-          fi
-
-          if [ -z "$PARTITION" ] || [ ! -f "$PARTITION" ]; then
-            echo "ERROR: PARTITION-TABLE.BIN NOT FOUND"
-            find "$BUILD" -type f -name "*.bin" -print
+          if [ ! -f "$BUILD/flash_args" ]; then
+            echo "ERROR: flash_args NOT FOUND"
+            echo ""
+            echo "Available flash files:"
+            find "$BUILD" -maxdepth 2 \
+              -type f \
+              \( -name "*flash*" -o -name "*partition*" -o -name "bootloader.bin" \) \
+              -print || true
             exit 1
           fi
 
           mkdir -p "$OUTPUT"
 
-          python3 -m pip install --disable-pip-version-check esptool
+          echo ""
+          echo "----- firmware.bin -----"
+          ls -lh "$BUILD/firmware.bin"
 
-          python3 -m esptool \
-            --chip esp32 \
-            merge_bin \
-            -o "$OUTPUT/TARS-FULL.bin" \
-            0x1000 "$BOOTLOADER" \
-            0x8000 "$PARTITION" \
-            0x10000 "$BUILD/firmware.bin"
+          echo ""
+          echo "----- flash_args -----"
+          cat "$BUILD/flash_args"
 
           echo ""
           echo "========================================"
-          echo "TARS FULL FIRMWARE"
+          echo "CREATING TARS-FULL.bin"
+          echo "========================================"
+
+          cd "$BUILD"
+
+          python3 -m esptool \
+            --chip esp32 \
+            merge-bin \
+            -o "$OUTPUT/TARS-FULL.bin" \
+            @flash_args
+
+          echo ""
+          echo "========================================"
+          echo "FULL FIRMWARE CREATED"
           echo "========================================"
 
           ls -lh "$OUTPUT/TARS-FULL.bin"
 
-      - name: Upload firmware
+          echo ""
+          echo "========================================"
+          echo "ESP IMAGE HEADER CHECK"
+          echo "========================================"
+
+          python3 -m esptool \
+            --chip esp32 \
+            image-info \
+            "$OUTPUT/TARS-FULL.bin" \
+            || true
+
+          echo ""
+          echo "========================================"
+          echo "FIRST 32 BYTES"
+          echo "========================================"
+
+          od -An -tx1 -N32 \
+            "$OUTPUT/TARS-FULL.bin"
+
+          echo ""
+          echo "========================================"
+          echo "OUTPUT DIRECTORY"
+          echo "========================================"
+
+          ls -lah "$OUTPUT"
+
+      - name: Prepare firmware package
+        shell: bash
+        run: |
+          set -e
+
+          BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
+          OUTPUT="$GITHUB_WORKSPACE/output"
+
+          echo "========================================"
+          echo "PREPARE FLASH PACKAGE"
+          echo "========================================"
+
+          mkdir -p "$OUTPUT/TARS-FLASH-PACKAGE"
+
+          cp \
+            "$OUTPUT/TARS-FULL.bin" \
+            "$OUTPUT/TARS-FLASH-PACKAGE/"
+
+          cp \
+            "$BUILD/firmware.bin" \
+            "$OUTPUT/TARS-FLASH-PACKAGE/"
+
+          if [ -f "$BUILD/flash_args" ]; then
+            cp \
+              "$BUILD/flash_args" \
+              "$OUTPUT/TARS-FLASH-PACKAGE/"
+          fi
+
+          if [ -f "$BUILD/flash_project_args" ]; then
+            cp \
+              "$BUILD/flash_project_args" \
+              "$OUTPUT/TARS-FLASH-PACKAGE/"
+          fi
+
+          if [ -f "$BUILD/flasher_args.json" ]; then
+            cp \
+              "$BUILD/flasher_args.json" \
+              "$OUTPUT/TARS-FLASH-PACKAGE/"
+          fi
+
+          find "$BUILD" \
+            -type f \
+            -name "bootloader.bin" \
+            -exec cp {} "$OUTPUT/TARS-FLASH-PACKAGE/bootloader.bin" \; \
+            -quit
+
+          find "$BUILD" \
+            -type f \
+            -name "partition-table.bin" \
+            -exec cp {} "$OUTPUT/TARS-FLASH-PACKAGE/partition-table.bin" \; \
+            -quit
+
+          echo ""
+          echo "PACKAGE CONTENT:"
+          find "$OUTPUT/TARS-FLASH-PACKAGE" \
+            -maxdepth 1 \
+            -type f \
+            -printf "%f\n" \
+            | sort
+
+      - name: Upload full firmware
         uses: actions/upload-artifact@v4
         with:
           name: TARS-FULL-Firmware
           path: output/TARS-FULL.bin
+          if-no-files-found: error
+
+      - name: Upload flash package
+        uses: actions/upload-artifact@v4
+        with:
+          name: TARS-FLASH-PACKAGE
+          path: output/TARS-FLASH-PACKAGE
           if-no-files-found: error
 
       - name: Upload build log
