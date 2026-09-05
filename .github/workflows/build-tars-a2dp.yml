@@ -56,6 +56,53 @@ jobs:
           cd esp-idf
           ./install.sh esp32
 
+      - name: Install ESP Audio Codec MP3
+        shell: bash
+        run: |
+          AUDIO_CODEC="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
+
+          echo "========================================"
+          echo "INSTALL ESP AUDIO CODEC 2.6.2"
+          echo "========================================"
+
+          if [ -d "$AUDIO_CODEC" ]; then
+            rm -rf "$AUDIO_CODEC"
+          fi
+
+          git clone \
+            --depth 1 \
+            --branch v2.6.2 \
+            https://github.com/espressif/esp_audio_codec.git \
+            "$AUDIO_CODEC"
+
+          echo ""
+          echo "ESP AUDIO CODEC:"
+          git -C "$AUDIO_CODEC" describe --tags --always || true
+
+          echo ""
+          echo "VERIFY MP3 DECODER:"
+
+          if [ -f "$AUDIO_CODEC/include/esp_audio_simple_dec.h" ]; then
+            echo "FOUND: esp_audio_simple_dec.h"
+          else
+            echo "ERROR: esp_audio_simple_dec.h NOT FOUND"
+            exit 1
+          fi
+
+          if grep -Rqs \
+            "ESP_AUDIO_SIMPLE_DEC_TYPE_MP3" \
+            "$AUDIO_CODEC/include" \
+            "$AUDIO_CODEC/src"; then
+
+            echo "FOUND: MP3 SIMPLE DECODER"
+
+          else
+
+            echo "ERROR: MP3 DECODER NOT FOUND"
+            exit 1
+
+          fi
+
       - name: Build mpy-cross
         run: |
           cd micropython
@@ -67,6 +114,7 @@ jobs:
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
+
           make -C ports/esp32 submodules
 
       - name: Apply esp32_rmt.c fix
@@ -86,18 +134,26 @@ jobs:
           echo "BEFORE PATCH:"
           grep -n "resolution_hz" "$RMT_FILE" || true
 
-          if grep -q "mp_uint_t resolution_hz = 1000000;" "$RMT_FILE"; then
+          if grep -q \
+            "mp_uint_t resolution_hz = 1000000;" \
+            "$RMT_FILE"; then
+
             echo "RMT ALREADY PATCHED"
 
-          elif grep -q "mp_uint_t resolution_hz;" "$RMT_FILE"; then
+          elif grep -q \
+            "mp_uint_t resolution_hz;" \
+            "$RMT_FILE"; then
+
             sed -i \
               's/mp_uint_t resolution_hz;/mp_uint_t resolution_hz = 1000000;/' \
               "$RMT_FILE"
 
           else
+
             echo "ERROR: EXPECTED resolution_hz DECLARATION NOT FOUND"
             grep -n "resolution_hz" "$RMT_FILE" || true
             exit 1
+
           fi
 
           echo ""
@@ -106,11 +162,17 @@ jobs:
 
           echo ""
 
-          if grep -q "mp_uint_t resolution_hz = 1000000;" "$RMT_FILE"; then
+          if grep -q \
+            "mp_uint_t resolution_hz = 1000000;" \
+            "$RMT_FILE"; then
+
             echo "PATCH SUCCESS: resolution_hz INITIALIZED"
+
           else
+
             echo "ERROR: RMT PATCH FAILED"
             exit 1
+
           fi
 
       - name: Install TARS board
@@ -142,6 +204,69 @@ jobs:
 
           ls -la "$BOARD_DIR"
 
+      - name: Configure WiFi IRAM safety
+        shell: bash
+        run: |
+          BOARD="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth"
+
+          echo "========================================"
+          echo "CONFIGURE WIFI IRAM"
+          echo "========================================"
+
+          sed -i '/CONFIG_ESP_WIFI_IRAM_OPT=/d' "$BOARD"
+          sed -i '/CONFIG_ESP_WIFI_RX_IRAM_OPT=/d' "$BOARD"
+          sed -i '/CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=/d' "$BOARD"
+
+          cat >> "$BOARD" << 'EOF'
+
+          # WiFi cache/IRAM stability
+          # Keep frequently used WiFi functions in IRAM.
+          CONFIG_ESP_WIFI_IRAM_OPT=y
+
+          # Keep WiFi RX path in IRAM.
+          CONFIG_ESP_WIFI_RX_IRAM_OPT=y
+
+          # Do not consume additional IRAM unnecessarily.
+          CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n
+          EOF
+
+          echo ""
+          echo "FINAL WIFI IRAM CONFIG:"
+          grep -n \
+            -E "CONFIG_ESP_WIFI_(IRAM_OPT|RX_IRAM_OPT|EXTRA_IRAM_OPT)" \
+            "$BOARD" || true
+
+          echo ""
+
+          if ! grep -q \
+            "^CONFIG_ESP_WIFI_IRAM_OPT=y" \
+            "$BOARD"; then
+
+            echo "ERROR: CONFIG_ESP_WIFI_IRAM_OPT NOT ENABLED"
+            exit 1
+
+          fi
+
+          if ! grep -q \
+            "^CONFIG_ESP_WIFI_RX_IRAM_OPT=y" \
+            "$BOARD"; then
+
+            echo "ERROR: CONFIG_ESP_WIFI_RX_IRAM_OPT NOT ENABLED"
+            exit 1
+
+          fi
+
+          if ! grep -q \
+            "^CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n" \
+            "$BOARD"; then
+
+            echo "ERROR: CONFIG_ESP_WIFI_EXTRA_IRAM_OPT NOT DISABLED"
+            exit 1
+
+          fi
+
+          echo "WIFI IRAM CONFIG SUCCESS"
+
       - name: Enable HTTPS Certificate Bundle
         shell: bash
         run: |
@@ -153,6 +278,7 @@ jobs:
           sed -i '/CONFIG_ESP_TLS_USE_SECURE_ELEMENT=/d' "$BOARD"
 
           cat >> "$BOARD" << 'EOF'
+
           # HTTPS / TLS untuk TARS Cloud TTS
           CONFIG_MBEDTLS_SSL_ALPN=y
 
@@ -169,7 +295,7 @@ jobs:
           echo "TARS HTTPS CONFIG"
           echo "========================================"
 
-          tail -n 25 "$BOARD"
+          tail -n 30 "$BOARD"
 
       - name: Patch requests HTTPS backend to ssl
         shell: bash
@@ -195,9 +321,7 @@ jobs:
           fi
 
           echo ""
-          echo "========================================"
-          echo "TLS REFERENCES BEFORE PATCH"
-          echo "========================================"
+          echo "TLS REFERENCES BEFORE PATCH:"
 
           grep -n \
             -E "import tls|import ssl|from tls|from ssl|SSLContext|PROTOCOL_TLS" \
@@ -205,20 +329,14 @@ jobs:
             2>/dev/null || true
 
           echo ""
-          echo "========================================"
           echo "PATCHING HTTPS BACKEND"
-          echo "========================================"
 
           sed -i -E \
             's/^([[:space:]]*)import[[:space:]]+tls[[:space:]]*$/\1import ssl as tls/' \
             "$REQ"
 
-          echo "REQUESTS PATCHED"
-
           echo ""
-          echo "========================================"
-          echo "TLS REFERENCES AFTER PATCH"
-          echo "========================================"
+          echo "TLS REFERENCES AFTER PATCH:"
 
           grep -n \
             -E "import tls|import ssl|from tls|from ssl|SSLContext|PROTOCOL_TLS" \
@@ -226,9 +344,7 @@ jobs:
             2>/dev/null || true
 
           echo ""
-          echo "========================================"
           echo "VERIFY REQUESTS PATCH"
-          echo "========================================"
 
           if grep -q -E \
             "^[[:space:]]*import[[:space:]]+tls[[:space:]]*$" \
@@ -304,7 +420,6 @@ jobs:
           else
 
             echo "ERROR: A2DP QUEUE PATCH FAILED"
-            echo "ACTUAL SOURCE LINE:"
 
             grep -n \
               "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
@@ -313,6 +428,48 @@ jobs:
             exit 1
 
           fi
+
+      - name: Verify MP3 component before build
+        shell: bash
+        run: |
+          AUDIO_CODEC="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
+
+          echo "========================================"
+          echo "VERIFY ESP AUDIO CODEC"
+          echo "========================================"
+
+          if [ ! -d "$AUDIO_CODEC" ]; then
+            echo "ERROR: ESP AUDIO CODEC DIRECTORY MISSING"
+            exit 1
+          fi
+
+          echo ""
+          echo "COMPONENT:"
+          ls -la "$AUDIO_CODEC"
+
+          echo ""
+          echo "CMAKE:"
+          if [ -f "$AUDIO_CODEC/CMakeLists.txt" ]; then
+            echo "CMakeLists.txt OK"
+          else
+            echo "ERROR: CMakeLists.txt NOT FOUND"
+            exit 1
+          fi
+
+          echo ""
+          echo "MP3 HEADER:"
+          find "$AUDIO_CODEC" \
+            -name "esp_audio_simple_dec.h" \
+            -print
+
+          echo ""
+          echo "MP3 SYMBOL:"
+          grep -R \
+            -n \
+            "ESP_AUDIO_SIMPLE_DEC_TYPE_MP3" \
+            "$AUDIO_CODEC/include" \
+            "$AUDIO_CODEC/src" \
+            2>/dev/null | head -n 10 || true
 
       - name: Build TARS firmware
         shell: bash
@@ -332,17 +489,24 @@ jobs:
             2>&1 | tee \
             "$GITHUB_WORKSPACE/tars_build.log"
 
-      - name: Diagnose HTTPS and mbedTLS build
+      - name: Diagnose HTTPS WiFi MP3 and build
         if: always()
         shell: bash
         run: |
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
           echo "========================================"
-          echo "FINAL SDKCONFIG HTTPS / TLS / CRYPTO"
+          echo "FINAL SDKCONFIG WIFI / HTTPS / TLS"
           echo "========================================"
 
           if [ -f "$BUILD/sdkconfig" ]; then
+
+            echo ""
+            echo "----- WIFI IRAM -----"
+
+            grep -n \
+              -E "^(CONFIG_ESP_WIFI_(IRAM_OPT|RX_IRAM_OPT|EXTRA_IRAM_OPT)|# CONFIG_ESP_WIFI_(IRAM_OPT|RX_IRAM_OPT|EXTRA_IRAM_OPT))" \
+              "$BUILD/sdkconfig" || true
 
             echo ""
             echo "----- ESP TLS -----"
@@ -372,37 +536,33 @@ jobs:
               -E "^(CONFIG_MBEDTLS_KEY_EXCHANGE|# CONFIG_MBEDTLS_KEY_EXCHANGE)" \
               "$BUILD/sdkconfig" || true
 
-            echo ""
-            echo "----- RSA / ECDSA / ECDH / ECP -----"
-
-            grep -n \
-              -E "^(CONFIG_MBEDTLS_(RSA|ECDSA|ECDH|ECP)|# CONFIG_MBEDTLS_(RSA|ECDSA|ECDH|ECP))" \
-              "$BUILD/sdkconfig" || true
-
-            echo ""
-            echo "----- X509 / PK / ASN1 -----"
-
-            grep -n \
-              -E "^(CONFIG_MBEDTLS_(X509|PK_|ASN1)|# CONFIG_MBEDTLS_(X509|PK_|ASN1))" \
-              "$BUILD/sdkconfig" || true
-
-            echo ""
-            echo "----- HASH -----"
-
-            grep -n \
-              -E "^(CONFIG_MBEDTLS_(SHA|MD5)|# CONFIG_MBEDTLS_(SHA|MD5))" \
-              "$BUILD/sdkconfig" || true
-
-            echo ""
-            echo "----- ENTIRE MBEDTLS CONFIG -----"
-
-            grep -n \
-              -E "^(CONFIG_MBEDTLS_|# CONFIG_MBEDTLS_)" \
-              "$BUILD/sdkconfig" || true
-
           else
 
             echo "SDKCONFIG NOT FOUND"
+
+          fi
+
+          echo ""
+          echo "========================================"
+          echo "ESP AUDIO CODEC CHECK"
+          echo "========================================"
+
+          AUDIO_CODEC="$GITHUB_WORKSPACE/esp-idf/components/esp_audio_codec"
+
+          if [ -d "$AUDIO_CODEC" ]; then
+            echo "ESP AUDIO CODEC DIRECTORY: OK"
+
+            git -C "$AUDIO_CODEC" describe --tags --always || true
+
+            echo ""
+            echo "MP3 HEADER:"
+            find "$AUDIO_CODEC" \
+              -name "esp_audio_simple_dec.h" \
+              -print || true
+
+          else
+
+            echo "ESP AUDIO CODEC DIRECTORY NOT FOUND"
 
           fi
 
@@ -444,7 +604,7 @@ jobs:
           echo "LAST BUILD LOG"
           echo "========================================"
 
-          tail -n 100 \
+          tail -n 150 \
             "$GITHUB_WORKSPACE/tars_build.log" \
             || true
 
