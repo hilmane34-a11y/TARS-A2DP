@@ -1823,7 +1823,7 @@ static void tars_a2dp_event_callback(
 
                     break;
 
-                case ESP_A2DP_CONNECTION_STATE_CONNECTING:
+                case ESP_A2D_CONNECTION_STATE_CONNECTING:
                     break;
 
                 default:
