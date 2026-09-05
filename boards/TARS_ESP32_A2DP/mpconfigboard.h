@@ -5,7 +5,7 @@
  * Jangan membesarkan GC heap sebelum kebutuhan Bluetooth
  * benar-benar diukur.
  */
-#define MICROPY_GC_INITIAL_HEAP_SIZE (41 * 1024)
+#define MICROPY_GC_INITIAL_HEAP_SIZE (36 * 1024)
 
 /*
  * GC threshold sebaiknya jangan terlalu kecil karena bisa
