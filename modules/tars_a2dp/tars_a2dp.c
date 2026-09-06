@@ -38,7 +38,7 @@
 #define TARS_DEVICE_NAME "TARS V1 MANZ"
 #define TARS_TARGET_NAME "I7-TWS"
 
-#define TARS_SAMPLE_RATE 22050 Hz
+#define TARS_SAMPLE_RATE 22050
 
 #define TARS_CLOUD_TTS_HOST "tars-cloud-v1.hilmane34.workers.dev"
 #define TARS_CLOUD_TTS_PATH "/tts"
