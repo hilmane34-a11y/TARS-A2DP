@@ -52,7 +52,7 @@
 #define TARS_MP3_OUTPUT_BUFFER_SIZE 4096
 
 /* PCM ring buffer 8 KB */
-#define TARS_PCM_RING_SIZE 8192
+#define TARS_PCM_RING_SIZE 4096
 
 #define TARS_FLASH_READ_BUFFER_SIZE 512
 
@@ -65,7 +65,7 @@
 #define TARS_TTS_VOLUME_DEN 10
 
 /* Decoder task */
-#define TARS_MP3_TASK_STACK_SIZE 6144
+#define TARS_MP3_TASK_STACK_SIZE 4096
 #define TARS_MP3_TASK_PRIORITY 5
 
 /* =========================================================
