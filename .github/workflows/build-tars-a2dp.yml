@@ -9,7 +9,6 @@ jobs:
     timeout-minutes: 60
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -19,7 +18,6 @@ jobs:
           set -e
 
           sudo apt-get update
-
           sudo apt-get install -y \
             git \
             make \
@@ -79,7 +77,6 @@ jobs:
           set -e
 
           cd "$GITHUB_WORKSPACE/esp-idf"
-
           ./install.sh esp32
 
       - name: Verify ESP-IDF environment
@@ -92,14 +89,12 @@ jobs:
           echo "========================================"
           echo "ESP-IDF VERSION"
           echo "========================================"
-
           idf.py --version
 
           echo ""
           echo "========================================"
           echo "COMPONENT MANAGER"
           echo "========================================"
-
           python3 -m pip show idf-component-manager || true
 
       - name: Build mpy-cross
@@ -108,7 +103,6 @@ jobs:
           set -e
 
           cd "$GITHUB_WORKSPACE/micropython"
-
           make -C mpy-cross
 
       - name: Setup ESP32 submodules
@@ -119,7 +113,6 @@ jobs:
           . "$GITHUB_WORKSPACE/esp-idf/export.sh"
 
           cd "$GITHUB_WORKSPACE/micropython"
-
           make -C ports/esp32 submodules
 
       - name: Apply esp32_rmt.c fix
@@ -146,10 +139,8 @@ jobs:
             echo "RMT FIX APPLIED"
 
           else
-
             echo "ERROR: resolution_hz NOT FOUND"
             exit 1
-
           fi
 
       - name: Install TARS board
@@ -191,8 +182,8 @@ jobs:
           echo "TARS RAM LOW CONFIG"
           echo "========================================"
 
-          # Jangan menggunakan WiFi IRAM optimization.
-          # RAM menjadi prioritas utama.
+          # WiFi IRAM optimization is disabled because
+          # runtime free internal RAM is the priority.
 
           sed -i \
             '/^CONFIG_ESP_WIFI_IRAM_OPT=/d' \
@@ -206,10 +197,41 @@ jobs:
             '/^CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=/d' \
             "$BOARD"
 
-          echo "WiFi IRAM optimization entries removed."
+          # Force the Bluetooth/A2DP RAM values.
+          # This prevents an old board value from surviving
+          # into the generated sdkconfig.
+
+          sed -i \
+            '/^CONFIG_A2DP_SBC_BUFFER_POOL_SIZE=/d' \
+            "$BOARD"
+
+          sed -i \
+            '/^CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE=/d' \
+            "$BOARD"
+
+          sed -i \
+            '/^CONFIG_BT_L2CAP_TX_BUFFER_SIZE=/d' \
+            "$BOARD"
+
+          sed -i \
+            '/^CONFIG_BT_L2CAP_DEFALT_MTU=/d' \
+            "$BOARD"
+
+          cat >> "$BOARD" <<'EOF'
+          CONFIG_A2DP_SBC_BUFFER_POOL_SIZE=4
+          CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE=3000
+          CONFIG_BT_L2CAP_TX_BUFFER_SIZE=3
+          CONFIG_BT_L2CAP_DEFALT_MTU=672
+          EOF
 
           echo ""
-          echo "Current WiFi IRAM settings:"
+          echo "Forced Bluetooth/A2DP RAM LOW settings:"
+          grep -n -E \
+            "CONFIG_A2DP_SBC_BUFFER_POOL_SIZE|CONFIG_BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE|CONFIG_BT_L2CAP_TX_BUFFER_SIZE|CONFIG_BT_L2CAP_DEFALT_MTU" \
+            "$BOARD"
+
+          echo ""
+          echo "WiFi IRAM settings:"
           grep -n \
             -E "CONFIG_ESP_WIFI_(IRAM_OPT|RX_IRAM_OPT|EXTRA_IRAM_OPT)" \
             "$BOARD" || true
@@ -252,17 +274,13 @@ jobs:
           cd "$FETCH"
 
           echo "========================================"
-          echo "INSTALL ESP AUDIO CODEC 2.6.2"
+          echo "INSTALL ESP AUDIO CODEC 2.6.2 EXACT"
           echo "========================================"
 
-          # PENTING:
-          # Jangan menjalankan:
-          # pip install -U idf-component-manager
-          #
-          # Gunakan component manager bawaan ESP-IDF 5.5.2.
-
+          # Exact version. Do not allow the dependency solver
+          # to select another 2.x release.
           idf.py add-dependency \
-            "espressif/esp_audio_codec^2.6.2"
+            "espressif/esp_audio_codec==2.6.2"
 
           idf.py reconfigure
 
@@ -270,8 +288,6 @@ jobs:
 
           if [ ! -d "$CODEC" ]; then
             echo "ERROR: ESP AUDIO CODEC NOT RESOLVED"
-            echo ""
-            echo "Searching managed components:"
             find "$FETCH" \
               -maxdepth 5 \
               -type d \
@@ -283,8 +299,6 @@ jobs:
 
           if [ ! -f "$HEADER" ]; then
             echo "ERROR: MP3 DECODER HEADER NOT FOUND"
-            echo ""
-            echo "Searching codec headers:"
 
             find "$CODEC" \
               -type f \
@@ -299,7 +313,6 @@ jobs:
           fi
 
           mkdir -p "$DEST"
-
           cp -a "$CODEC"/. "$DEST"/
 
           if [ ! -f \
@@ -307,7 +320,6 @@ jobs:
 
             echo "ERROR: CODEC COPY FAILED"
             exit 1
-
           fi
 
           echo ""
@@ -322,6 +334,34 @@ jobs:
           echo "MP3 header:"
           echo "$DEST/include/simple_dec/esp_audio_simple_dec.h"
 
+          echo ""
+          echo "Codec Kconfig files:"
+          find "$DEST" \
+            -type f \
+            \( \
+              -name "Kconfig" \
+              -o \
+              -name "Kconfig.projbuild" \
+            \) \
+            -print
+
+          echo ""
+          echo "MP3/MP2 configuration symbols:"
+          grep -R -n -E \
+            "AUDIO_DECODER_(MP3|MP2)_SUPPORT" \
+            "$DEST" \
+            2>/dev/null || true
+
+          echo ""
+          echo "Resolved dependency:"
+          if [ -f "$FETCH/dependencies.lock" ]; then
+            grep -n \
+              -A8 \
+              -B2 \
+              "esp_audio_codec" \
+              "$FETCH/dependencies.lock" || true
+          fi
+
       - name: Verify MP3 CMake
         shell: bash
         run: |
@@ -335,7 +375,6 @@ jobs:
 
             echo "ERROR: ESP AUDIO CODEC LINK MISSING"
             exit 1
-
           fi
 
           echo "MP3 CMAKE LINK OK"
@@ -391,9 +430,7 @@ jobs:
             echo "REQUESTS HTTPS PATCH OK"
 
           else
-
             echo "REQUESTS FILE NOT FOUND"
-
           fi
 
       - name: Patch A2DP queue RAM LOW
@@ -420,6 +457,27 @@ jobs:
           grep \
             "MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ" \
             "$A2DP_FILE"
+
+      - name: Verify final TARS RAM LOW config
+        shell: bash
+        run: |
+          set -e
+
+          BOARD="$GITHUB_WORKSPACE/micropython/ports/esp32/boards/TARS_ESP32_A2DP/sdkconfig.bluetooth"
+
+          echo "========================================"
+          echo "FINAL TARS RAM LOW CONFIG"
+          echo "========================================"
+
+          grep -n -E \
+            "CONFIG_(A2DP_SBC_BUFFER_POOL_SIZE|BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE|BT_L2CAP_DEFALT_MTU|BT_L2CAP_TX_BUFFER_SIZE|BT_CLASSIC_QNUM_LINKS|BT_L2CAP_CHANNELS_NUM|BT_BLE_ENABLED|SPIRAM)" \
+            "$BOARD" || true
+
+          echo ""
+          echo "MP3 decoder support:"
+          grep -n -E \
+            "CONFIG_AUDIO_DECODER_(MP3|AAC|SBC|FLAC|OPUS|VORBIS|PCM)_SUPPORT" \
+            "$BOARD" || true
 
       - name: Build TARS firmware
         shell: bash
@@ -478,9 +536,18 @@ jobs:
             echo "MP3 HEADER: OK"
 
           else
-
             echo "MP3 HEADER: MISSING"
+          fi
 
+          echo ""
+          echo "========================================"
+          echo "CODEC VERSION"
+          echo "========================================"
+
+          if [ -f "$CODEC/idf_component.yml" ]; then
+            grep -n \
+              -E "version:|description:" \
+              "$CODEC/idf_component.yml" || true
           fi
 
           echo ""
@@ -512,6 +579,22 @@ jobs:
 
           echo ""
           echo "========================================"
+          echo "FINAL SDKCONFIG RAM/A2DP"
+          echo "========================================"
+
+          if [ -n "$BUILD" ] && \
+             [ -f "$BUILD/sdkconfig" ]; then
+
+            grep -n -E \
+              "CONFIG_(A2DP_SBC_BUFFER_POOL_SIZE|BT_A2DP_SBC_ENCODER_TASK_STACK_SIZE|BT_L2CAP_DEFALT_MTU|BT_L2CAP_TX_BUFFER_SIZE|BT_CLASSIC_QNUM_LINKS|BT_L2CAP_CHANNELS_NUM|BT_BLE_ENABLED|SPIRAM)" \
+              "$BUILD/sdkconfig" || true
+
+          else
+            echo "SDKCONFIG NOT FOUND"
+          fi
+
+          echo ""
+          echo "========================================"
           echo "WIFI IRAM"
           echo "========================================"
 
@@ -523,9 +606,7 @@ jobs:
               "$BUILD/sdkconfig" || true
 
           else
-
             echo "SDKCONFIG NOT FOUND"
-
           fi
 
           echo ""
@@ -537,13 +618,10 @@ jobs:
              [ -f "$BUILD/firmware.bin" ]; then
 
             ls -lh "$BUILD/firmware.bin"
-
             xxd -l 16 "$BUILD/firmware.bin"
 
           else
-
             echo "FIRMWARE NOT FOUND"
-
           fi
 
           echo ""
@@ -557,9 +635,7 @@ jobs:
               "$GITHUB_WORKSPACE/tars_build.log"
 
           else
-
             echo "BUILD LOG NOT FOUND"
-
           fi
 
       - name: Prepare firmware
@@ -570,12 +646,10 @@ jobs:
           BUILD="$GITHUB_WORKSPACE/micropython/ports/esp32/build-TARS_ESP32_A2DP"
 
           if [ ! -f "$BUILD/firmware.bin" ]; then
-
             echo "ERROR: firmware.bin NOT FOUND"
             echo ""
             echo "The build step failed before firmware creation."
             exit 1
-
           fi
 
           mkdir -p \
@@ -590,7 +664,6 @@ jobs:
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
-
         with:
           name: TARS-MicroPython-ESP32-A2DP
           path: output/TARS-MicroPython-ESP32-A2DP.bin
@@ -599,7 +672,6 @@ jobs:
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
-
         with:
           name: TARS-Build-Log
           path: tars_build.log
