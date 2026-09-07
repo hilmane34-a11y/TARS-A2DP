@@ -970,7 +970,7 @@ static bool tars_mp3_decoder_open(void)
         .dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_MP3,
         .dec_cfg = NULL,
         .cfg_size = 0,
-        .use_frame_dec = false
+        .use_frame_dec = true
     };
 
     esp_audio_err_t ret =
