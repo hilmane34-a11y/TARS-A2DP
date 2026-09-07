@@ -47,9 +47,9 @@
 #define TARS_TTS_MAX_TEXT_LENGTH 300
 
 /* RAM kecil */
-#define TARS_HTTP_BUFFER_SIZE 256
+#define TARS_HTTP_BUFFER_SIZE 512
 #define TARS_MP3_INPUT_BUFFER_SIZE 512
-#define TARS_MP3_OUTPUT_BUFFER_SIZE 2048
+#define TARS_MP3_OUTPUT_BUFFER_SIZE 4096
 
 /* PCM ring buffer 8 KB */
 #define TARS_PCM_RING_SIZE 4096
@@ -65,7 +65,7 @@
 #define TARS_TTS_VOLUME_DEN 10
 
 /* Decoder task */
-#define TARS_MP3_TASK_STACK_SIZE 3072
+#define TARS_MP3_TASK_STACK_SIZE 4096
 #define TARS_MP3_TASK_PRIORITY 5
 
 /* =========================================================
