@@ -1297,9 +1297,7 @@ static bool tars_decoder_write_pcm(
    MP3 DECODER TASK
    ========================================================= */
 
-static void tars_mp3_decode_task(
-    void *arg
-)
+static void tars_mp3_decode_task(void *arg)
 {
     (void)arg;
 
@@ -1307,25 +1305,19 @@ static void tars_mp3_decode_task(
     tars_mp3_decoder_eof = false;
     tars_mp3_decoder_error = false;
 
-    tars_status_text =
-        "MP3 DECODER STARTED";
+    tars_status_text = "MP3 DECODER STARTED";
 
     if (!tars_mp3_decoder_open()) {
-
         tars_mp3_decoder_error = true;
         tars_mp3_decoder_running = false;
-
-        tars_status_text =
-            "MP3 DECODER OPEN FAILED";
-
+        tars_status_text = "MP3 DECODER OPEN FAILED";
         tars_mp3_task_handle = NULL;
-
         vTaskDelete(NULL);
         return;
     }
 
     size_t flash_pos = 0;
-
+    size_t input_len = 0;
     bool source_finished = false;
 
     while (
@@ -1333,228 +1325,276 @@ static void tars_mp3_decode_task(
         !tars_mp3_decoder_error
     ) {
 
-        /*
-         * Do not allow ring buffer to
-         * overflow.
-         */
-
-        if (tars_pcm_ring_free() <
-            1024) {
-
+        if (tars_pcm_ring_free() < 1024) {
             vTaskDelay(2);
             continue;
         }
 
-        if (!source_finished) {
+        /*
+         * Isi buffer hanya jika masih ada ruang.
+         * Data yang belum dikonsumsi decoder tetap dipertahankan.
+         */
+        if (!source_finished &&
+            input_len < TARS_MP3_INPUT_BUFFER_SIZE) {
+
+            size_t free_space =
+                TARS_MP3_INPUT_BUFFER_SIZE - input_len;
 
             size_t remaining =
-                tars_tts_flash_size -
-                flash_pos;
+                tars_tts_flash_size - flash_pos;
 
             if (remaining == 0) {
-
                 source_finished = true;
             }
             else {
 
-                size_t read_len =
-                    remaining;
+                size_t read_len = remaining;
 
-                if (read_len >
-                    TARS_MP3_INPUT_BUFFER_SIZE) {
-
-                    read_len =
-                        TARS_MP3_INPUT_BUFFER_SIZE;
+                if (read_len > free_space) {
+                    read_len = free_space;
                 }
 
                 size_t got =
                     tars_read_flash_bytes(
                         flash_pos,
-                        tars_mp3_input,
+                        tars_mp3_input + input_len,
                         read_len
                     );
 
                 if (got == 0) {
-
-                    tars_mp3_decoder_error =
-                        true;
-
+                    tars_mp3_decoder_error = true;
+                    printf("MP3 FLASH READ FAILED\n");
                     break;
                 }
 
                 flash_pos += got;
+                input_len += got;
 
-                esp_audio_simple_dec_raw_t raw = {
-                    .buffer =
-                        tars_mp3_input,
-                    .len =
-                        (uint32_t)got,
-                    .eos =
-                        (flash_pos >=
-                         tars_tts_flash_size),
-                    .consumed = 0
-                };
-
-                while (
-                    raw.len > 0 &&
-                    tars_tts_playing
-                ) {
-
-                    esp_audio_simple_dec_out_t out = {
-                        .buffer =
-                            tars_mp3_output,
-                        .len =
-                            TARS_MP3_OUTPUT_BUFFER_SIZE,
-                        .needed_size = 0,
-                        .decoded_size = 0
-                    };
-
-                    esp_audio_err_t ret =
-                        esp_audio_simple_dec_process(
-                            tars_mp3_decoder,
-                            &raw,
-                            &out
-                        );
-
-                    if (ret ==
-                        ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
-
-                        /*
-                         * We intentionally do not
-                         * dynamically enlarge the
-                         * output buffer.
-                         *
-                         * MP3 frames normally fit
-                         * inside 4096 bytes.
-                         */
-
-                        tars_mp3_decoder_error =
-                            true;
-
-                        break;
-                    }
-
-                    if (ret !=
-                        ESP_AUDIO_ERR_OK) {
-
-                        tars_mp3_decoder_error =
-                            true;
-
-                        break;
-                    }
-
-                    if (out.decoded_size > 0) {
-
-                        /*
-                         * Get audio information
-                         * after first decoded frame.
-                         */
-
-                        esp_audio_simple_dec_info_t info;
-
-                        memset(
-                            &info,
-                            0,
-                            sizeof(info)
-                        );
-
-                        if (
-                            esp_audio_simple_dec_get_info(
-                                tars_mp3_decoder,
-                                &info
-                            ) ==
-                            ESP_AUDIO_ERR_OK
-                        ) {
-
-                            if (info.sample_rate >
-                                0) {
-
-                                tars_mp3_sample_rate =
-                                    info.sample_rate;
-                            }
-
-                            if (
-                                info.channel >= 1 &&
-                                info.channel <= 2
-                            ) {
-
-                                tars_mp3_channels =
-                                    info.channel;
-                            }
-
-                            if (info.bits_per_sample >
-                                0) {
-
-                                tars_mp3_bits =
-                                    info.bits_per_sample;
-                            }
-                        }
-
-                        if (tars_mp3_bits != 16) {
-
-                            tars_mp3_decoder_error =
-                                true;
-
-                            break;
-                        }
-
-                        if (
-                            !tars_decoder_write_pcm(
-                                out.buffer,
-                                out.decoded_size
-                            )
-                        ) {
-
-                            tars_mp3_decoder_error =
-                                true;
-
-                            break;
-                        }
-                    }
-
-                    if (raw.consumed == 0) {
-
-                        /*
-                         * Decoder may keep data
-                         * internally.
-                         */
-
-                        break;
-                    }
-
-                    if (raw.consumed >
-                        raw.len) {
-
-                        tars_mp3_decoder_error =
-                            true;
-
-                        break;
-                    }
-
-                    raw.len -= raw.consumed;
-                    raw.buffer += raw.consumed;
-                    raw.consumed = 0;
+                if (flash_pos >= tars_tts_flash_size) {
+                    source_finished = true;
                 }
             }
         }
-        else {
 
-            /*
-             * All MP3 data has been supplied.
-             * Wait until PCM ring drains.
-             */
+        if (input_len == 0) {
 
-            if (tars_pcm_ring_used() == 0) {
+            if (source_finished) {
                 break;
             }
 
-            vTaskDelay(2);
+            vTaskDelay(1);
+            continue;
+        }
+
+        esp_audio_simple_dec_raw_t raw = {
+            .buffer = tars_mp3_input,
+            .len = (uint32_t)input_len,
+            .eos = source_finished,
+            .consumed = 0
+        };
+
+        esp_audio_simple_dec_out_t out = {
+            .buffer = tars_mp3_output,
+            .len = TARS_MP3_OUTPUT_BUFFER_SIZE,
+            .needed_size = 0,
+            .decoded_size = 0
+        };
+
+        esp_audio_err_t ret =
+            esp_audio_simple_dec_process(
+                tars_mp3_decoder,
+                &raw,
+                &out
+            );
+
+        printf(
+            "MP3 PROCESS RET:%d IN:%u CONSUMED:%u NEED:%u DECODED:%u EOS:%d\n",
+            (int)ret,
+            (unsigned)input_len,
+            (unsigned)raw.consumed,
+            (unsigned)out.needed_size,
+            (unsigned)out.decoded_size,
+            source_finished ? 1 : 0
+        );
+
+        if (ret == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
+            printf(
+                "MP3 OUTPUT BUFFER NEED:%u HAVE:%u\n",
+                (unsigned)out.needed_size,
+                (unsigned)TARS_MP3_OUTPUT_BUFFER_SIZE
+            );
+
+            tars_mp3_decoder_error = true;
+            break;
+        }
+
+        if (ret == ESP_AUDIO_ERR_DATA_LACK) {
+
+            /*
+             * JANGAN buang input.
+             * Buffer tetap dipertahankan.
+             */
+            if (source_finished) {
+                printf(
+                    "MP3 DATA LACK AT EOF INPUT:%u\n",
+                    (unsigned)input_len
+                );
+
+                tars_mp3_decoder_error = true;
+                break;
+            }
+
+            vTaskDelay(1);
+            continue;
+        }
+
+        if (ret != ESP_AUDIO_ERR_OK) {
+
+            printf(
+                "MP3 PROCESS ERROR RET:%d\n",
+                (int)ret
+            );
+
+            tars_mp3_decoder_error = true;
+            break;
+        }
+
+        if (raw.consumed > input_len) {
+
+            printf(
+                "MP3 INVALID CONSUMED:%u INPUT:%u\n",
+                (unsigned)raw.consumed,
+                (unsigned)input_len
+            );
+
+            tars_mp3_decoder_error = true;
+            break;
+        }
+
+        /*
+         * Hanya hapus data yang benar-benar dikonsumsi decoder.
+         */
+        if (raw.consumed > 0) {
+
+            input_len -= raw.consumed;
+
+            if (input_len > 0) {
+
+                memmove(
+                    tars_mp3_input,
+                    tars_mp3_input + raw.consumed,
+                    input_len
+                );
+            }
+        }
+
+        /*
+         * PCM hasil decoder.
+         */
+        if (out.decoded_size > 0) {
+
+            esp_audio_simple_dec_info_t info;
+
+            memset(
+                &info,
+                0,
+                sizeof(info)
+            );
+
+            if (
+                esp_audio_simple_dec_get_info(
+                    tars_mp3_decoder,
+                    &info
+                ) == ESP_AUDIO_ERR_OK
+            ) {
+
+                if (info.sample_rate > 0) {
+                    tars_mp3_sample_rate =
+                        info.sample_rate;
+                }
+
+                if (
+                    info.channel >= 1 &&
+                    info.channel <= 2
+                ) {
+                    tars_mp3_channels =
+                        info.channel;
+                }
+
+                if (info.bits_per_sample > 0) {
+                    tars_mp3_bits =
+                        info.bits_per_sample;
+                }
+
+                printf(
+                    "MP3 INFO RATE:%u CH:%u BITS:%u\n",
+                    (unsigned)info.sample_rate,
+                    (unsigned)info.channel,
+                    (unsigned)info.bits_per_sample
+                );
+            }
+
+            if (tars_mp3_bits != 16) {
+
+                printf(
+                    "MP3 UNSUPPORTED BITS:%u\n",
+                    (unsigned)tars_mp3_bits
+                );
+
+                tars_mp3_decoder_error = true;
+                break;
+            }
+
+            printf(
+                "MP3 PCM DECODED:%u\n",
+                (unsigned)out.decoded_size
+            );
+
+            if (
+                !tars_decoder_write_pcm(
+                    out.buffer,
+                    out.decoded_size
+                )
+            ) {
+
+                printf(
+                    "MP3 PCM WRITE FAILED\n"
+                );
+
+                tars_mp3_decoder_error = true;
+                break;
+            }
+        }
+
+        /*
+         * Tidak ada data yang dikonsumsi dan tidak ada PCM.
+         *
+         * Jangan membuang buffer.
+         * Jika masih ada ruang, loop berikutnya akan mengambil
+         * data MP3 tambahan dari flash.
+         */
+        if (
+            raw.consumed == 0 &&
+            out.decoded_size == 0
+        ) {
+
+            printf(
+                "MP3 NO PROGRESS INPUT:%u\n",
+                (unsigned)input_len
+            );
+
+            if (source_finished) {
+                printf(
+                    "MP3 NO PROGRESS AT EOF\n"
+                );
+
+                tars_mp3_decoder_error = true;
+                break;
+            }
+
+            vTaskDelay(1);
         }
     }
-
-    /*
-     * Drain decoded PCM before ending.
-     */
 
     if (!tars_mp3_decoder_error) {
 
@@ -1567,12 +1607,10 @@ static void tars_mp3_decode_task(
     }
 
     if (tars_mp3_decoder_error) {
-
         tars_status_text =
             "MP3 DECODER ERROR";
     }
     else {
-
         tars_mp3_decoder_eof = true;
 
         if (tars_tts_playing) {
@@ -1585,9 +1623,10 @@ static void tars_mp3_decode_task(
 
     tars_mp3_decoder_running = false;
 
-    if (tars_tts_playing &&
-        !tars_mp3_decoder_error) {
-
+    if (
+        tars_tts_playing &&
+        !tars_mp3_decoder_error
+    ) {
         tars_tts_playing = false;
         tars_tts_read_pos =
             tars_tts_flash_size;
