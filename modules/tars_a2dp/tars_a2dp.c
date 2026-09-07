@@ -957,43 +957,50 @@ static bool tars_mp3_decoder_open(void)
         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 
     printf(
-        "MP3 REGISTER | DEC:%d SIMPLE:%d | HEAP:%u->%u | LARGEST:%u->%u\n",
-        reg_dec,
-        reg_simple,
-        (unsigned)heap_before,
-        (unsigned)heap_after_reg,
-        (unsigned)largest_before,
-        (unsigned)largest_after_reg
+    "MP3 BEFORE REGISTER | HEAP:%u | LARGEST:%u\n",
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)
+);
+
+esp_audio_err_t reg_dec =
+    esp_audio_dec_register_default();
+
+printf(
+    "MP3 AFTER DEC REGISTER | RET:%d | HEAP:%u | LARGEST:%u\n",
+    reg_dec,
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)
+);
+
+esp_audio_err_t reg_simple =
+    esp_audio_simple_dec_register_default();
+
+printf(
+    "MP3 AFTER SIMPLE REGISTER | RET:%d | HEAP:%u | LARGEST:%u\n",
+    reg_simple,
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)
+);
+
+esp_audio_simple_dec_cfg_t cfg = {
+    .dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_MP3,
+    .dec_cfg = NULL,
+    .cfg_size = 0,
+    .use_frame_dec = false
+};
+
+esp_audio_err_t ret =
+    esp_audio_simple_dec_open(
+        &cfg,
+        &tars_mp3_decoder
     );
 
-    esp_audio_simple_dec_cfg_t cfg = {
-        .dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_MP3,
-        .dec_cfg = NULL,
-        .cfg_size = 0,
-        .use_frame_dec = false
-    };
-
-    esp_audio_err_t ret =
-        esp_audio_simple_dec_open(
-            &cfg,
-            &tars_mp3_decoder
-        );
-
-    size_t heap_after_open =
-        heap_caps_get_free_size(MALLOC_CAP_8BIT);
-
-    size_t largest_after_open =
-        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-
-    printf(
-        "MP3 OPEN | RET:%d | HANDLE:%p | HEAP:%u->%u | LARGEST:%u->%u\n",
-        ret,
-        tars_mp3_decoder,
-        (unsigned)heap_after_reg,
-        (unsigned)heap_after_open,
-        (unsigned)largest_after_reg,
-        (unsigned)largest_after_open
-    );
+printf(
+    "MP3 AFTER OPEN | RET:%d | HEAP:%u | LARGEST:%u\n",
+    ret,
+    (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)
+);
 
     if (ret != ESP_AUDIO_ERR_OK) {
         tars_mp3_decoder = NULL;
